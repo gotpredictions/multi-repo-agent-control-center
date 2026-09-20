@@ -90,17 +90,18 @@ repos until you explicitly start one from the dot menu, which also queues that r
 
 ### Registering the MCP server with a coordinator session
 
-Add to that session's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "control-center": {
-      "command": "node",
-      "args": ["/Users/evso/code/multi-repo-agent-control-center/out/mcpServer.js"]
-    }
-  }
-}
+```bash
+claude mcp add --scope user control-center -- node /Users/evso/code/multi-repo-agent-control-center/out/mcpServer.js
 ```
+
+`--scope user` makes it available from any project/session on this machine, not just one repo —
+appropriate here since a "coordinator" isn't tied to any single repo. Verify with `claude mcp list`
+(should show `control-center — ✔ Connected`). Registering doesn't reach sessions already
+running — MCP servers load at session start, not hot-reloaded into one already open, so an
+existing session needs to be restarted before it'll see this tool.
+
+(Hand-editing `~/.claude.json`'s `mcpServers` key directly works too, in principle, but it's Claude
+Code's own live state file — rewritten by every running session for history/settings/etc. —
+so `claude mcp add` is the safer path, not just the more convenient one.)
 
 (Add `--db <path>` if you're not using the default `~/.control-center/control-center.db`.)
