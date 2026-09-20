@@ -25,10 +25,34 @@ function parseArg(name: string, fallback: string): string {
 const dbPath = parseArg("--db", `${process.env.HOME}/.control-center/control-center.db`);
 const db = new Db(dbPath);
 
-const server = new McpServer({
-  name: "multi-repo-agent-control-center",
-  version: "0.0.1",
-});
+const SERVER_INSTRUCTIONS = `Control center for coding-agent sessions running across multiple repos.
+Three channels exist here, and they are not interchangeable:
+
+- dispatch: proactive, your idea — a design adjustment, a clarification
+  request, a new task. Queued, run FIFO, one at a time per repo. Use this
+  for almost everything.
+- resolve_escalation: reactive, the agent's idea — it is genuinely
+  blocked right now (agent_status: needsHuman) on either a permission gate
+  or a direct question it asked to continue its turn. dispatch will NOT
+  reach a blocked repo: queued dispatches are not run while a repo is
+  needsHuman. Check list_open_escalations first if you're unsure why a
+  repo isn't picking up work.
+- answer_finding / add_finding: a durable log, not a live channel.
+  Answering a finding only records your decision — it does not notify
+  the agent. Follow up with dispatch to actually hand a decision back.
+
+Typical loop: list_repos to see what's tracked and its status → dispatch
+to hand a repo new work → list_open_escalations to see what's actually
+blocked and needs you → resolve_escalation to unblock it. Repo ids are
+short slugs (list_repos shows them), not full repo names.`;
+
+const server = new McpServer(
+  {
+    name: "multi-repo-agent-control-center",
+    version: "0.0.1",
+  },
+  { instructions: SERVER_INSTRUCTIONS }
+);
 
 function text(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
@@ -67,6 +91,13 @@ server.tool(
   async ({ repoId, text: body }) => {
     const repo = db.getRepo(repoId);
     if (!repo) return text({ error: `no such repo: ${repoId}` });
+    if (repo.agent_status === "needsHuman") {
+      const esc = db.openEscalationForRepo(repoId);
+      return text({
+        error: `${repo.repo} is blocked on a live escalation (kind: ${esc?.kind ?? "unknown"}) — this dispatch has been queued, but it will NOT run until that's resolved. Call resolve_escalation on escalation ${esc?.id ?? "?"} first.`,
+        queued: db.queueDispatch(repoId, body),
+      });
+    }
     return text(db.queueDispatch(repoId, body));
   }
 );
