@@ -17,6 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { Db } from "./db";
 import { INTRO_PROMPT } from "./prompts";
+import { runGithubDiscoveryAndUpsert, runLocalDiscoveryAndUpsert } from "./discover";
 
 function parseArg(name: string, fallback: string): string {
   const i = process.argv.indexOf(name);
@@ -41,6 +42,14 @@ Three channels exist here, and they are not interchangeable:
 - answer_finding / add_finding: a durable log, not a live channel.
   Answering a finding only records your decision — it does not notify
   the agent. Follow up with dispatch to actually hand a decision back.
+
+If list_repos looks incomplete or stale — a repo you know exists isn't
+there, or one that should have a local clone by now still shows
+cwd: '' — call discover_local_repos (fast, no network, finds what's
+already cloned) or discover_github_repos (needs \`gh\`, also finds repos
+that exist remotely but aren't cloned yet) to resync, rather than
+assuming this tool's picture is current. It only tracks what it's been
+told about; nothing here watches GitHub or the filesystem on its own.
 
 Before dispatching to a repo you don't already know, check list_repos'
 summary field first — it's an agent-authored self-introduction (what the
@@ -86,6 +95,44 @@ server.tool(
       escalation: db.openEscalationForRepo(repoId),
       recentLogs: db.recentLogs(repoId, 15),
     });
+  }
+);
+
+server.tool(
+  "discover_github_repos",
+  "Resync the tracked repo list against real GitHub state (via `gh`, not a token this tool manages itself) and check which ones have a local clone this machine can actually run against. Adds newly-found repos (including ones that exist on GitHub but aren't cloned locally yet — flagged via cwd: '', not hidden), updates cwd for ones that are now locally cloned, and never blanks a repo's existing cwd just because this pass didn't find it (it may have looked in the wrong place). Needs `gh` installed and network access; see discover_local_repos for a network-free alternative that only finds what's already checked out. This only tells you a repo EXISTS and is runnable — it does not know what a repo does; that's what summary (see list_repos) is for, and it only populates once a repo with a real cwd is started.",
+  {
+    owner: z.string().optional().describe("GitHub org or user to list repos for. Omit to reuse whatever was used last time."),
+    codeRoot: z.string().optional().describe("Local directory to look for clones in (checked as <codeRoot>/<repo-name>). Omit to reuse whatever was used last time."),
+  },
+  async ({ owner, codeRoot }) => {
+    const resolvedOwner = owner || db.getMeta("github_owner");
+    const resolvedCodeRoot = codeRoot || db.getMeta("code_root");
+    if (!resolvedOwner || !resolvedCodeRoot) {
+      return text({ error: "owner and codeRoot are required the first time — no prior discovery run to reuse them from." });
+    }
+    try {
+      return text(runGithubDiscoveryAndUpsert(db, resolvedOwner, resolvedCodeRoot));
+    } catch (err: any) {
+      return text({ error: `discovery failed: ${err?.message ?? err}` });
+    }
+  }
+);
+
+server.tool(
+  "discover_local_repos",
+  "Resync the tracked repo list against what's actually on disk: scans codeRoot for directories that are git repos and tracks each one, using its directory name as both id and repo name. No network, no `gh`, no auth — finds only what's already cloned, nothing that exists remotely but isn't checked out (use discover_github_repos for that). The simpler default when you just want 'whatever's already sitting next to this one.'",
+  { codeRoot: z.string().optional().describe("Directory to scan for git repos. Omit to reuse whatever was used last time.") },
+  async ({ codeRoot }) => {
+    const resolvedCodeRoot = codeRoot || db.getMeta("code_root");
+    if (!resolvedCodeRoot) {
+      return text({ error: "codeRoot is required the first time — no prior discovery run to reuse it from." });
+    }
+    try {
+      return text(runLocalDiscoveryAndUpsert(db, resolvedCodeRoot));
+    } catch (err: any) {
+      return text({ error: `discovery failed: ${err?.message ?? err}` });
+    }
   }
 );
 

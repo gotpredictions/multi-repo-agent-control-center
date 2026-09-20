@@ -160,11 +160,69 @@ export function activate(context: vscode.ExtensionContext) {
     renderPanel().catch((err) => out.appendLine(`render failed: ${err?.message ?? err}`));
   });
 
+  async function maybeOnboard() {
+    await runner.ready;
+    const snapshot = await runner.call("snapshot");
+    if (snapshot.repos.length > 0) return;
+
+    const defaultRoot = vscode.workspace.workspaceFolders?.[0]
+      ? path.dirname(vscode.workspace.workspaceFolders[0].uri.fsPath)
+      : "";
+
+    // All three optional, all skippable — none of this runs unless
+    // explicitly chosen. GitHub and sibling-scan discovery are independent
+    // (either, both, or neither), not a fallback chain.
+    const choice = await vscode.window.showInformationMessage(
+      "No repos tracked yet. How do you want to set this up?",
+      "Use sibling repos",
+      "Discover from GitHub",
+      "Use example data",
+      "Skip"
+    );
+    if (choice === "Use sibling repos") {
+      const codeRoot = await vscode.window.showInputBox({
+        prompt: "Directory to scan for git repos (no network, no gh — just what's already cloned)",
+        value: defaultRoot,
+      });
+      if (!codeRoot) return;
+      try {
+        const result = await runner.call("discoverLocalRepos", { codeRoot });
+        vscode.window.showInformationMessage(`Found ${result.discovered} local repos under ${codeRoot}.`);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Local discovery failed: ${err?.message ?? err}`);
+      }
+    } else if (choice === "Discover from GitHub") {
+      const owner = await vscode.window.showInputBox({
+        prompt: "GitHub org or user to discover repos from (uses your existing `gh` login)",
+        placeHolder: "e.g. signed-off",
+      });
+      if (!owner) return;
+      const codeRoot = await vscode.window.showInputBox({
+        prompt: "Local directory to look for existing clones in (checked as <this>/<repo-name>)",
+        value: defaultRoot,
+      });
+      if (!codeRoot) return;
+      try {
+        const result = await runner.call("discoverGithubRepos", { owner, codeRoot });
+        vscode.window.showInformationMessage(
+          `Discovered ${result.discovered} repos (${result.withLocalClone} with a local clone found under ${codeRoot}).`
+        );
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Discovery failed: ${err?.message ?? err}`);
+      }
+    } else if (choice === "Use example data") {
+      await runner.call("seedExample");
+    }
+    // "Skip", or the picker dismissed: leave it empty. Both discovery modes
+    // are also reachable later from an MCP-connected coordinator.
+  }
+
   const openDashboard = vscode.commands.registerCommand("multiRepoAgentControlCenter.openDashboard", async () => {
     if (panel) {
       panel.reveal(vscode.ViewColumn.One);
       return;
     }
+    await maybeOnboard();
     panel = vscode.window.createWebviewPanel("agentControlCenter", "Agent Control Center", vscode.ViewColumn.One, {
       enableScripts: true,
       localResourceRoots: [mediaRoot],
@@ -201,7 +259,14 @@ export function activate(context: vscode.ExtensionContext) {
             out.appendLine(`unknown webview message: ${JSON.stringify(msg)}`);
         }
       } catch (err: any) {
-        out.appendLine(`action failed: ${err?.message ?? err}`);
+        const message = err?.message ?? String(err);
+        out.appendLine(`action failed: ${message}`);
+        // Otherwise this only ever showed up in the output channel —
+        // e.g. starting a repo with no local clone would fail server-side
+        // (see server.ts's startAgent guard) while the webview's own
+        // optimistic setState already flipped the dot green, with nothing
+        // telling the person why it silently didn't actually start.
+        vscode.window.showErrorMessage(`Agent Control Center: ${message}`);
       }
       // The daemon's own onChange event will trigger a re-render for
       // anything that actually wrote to the DB; no need to force one here.

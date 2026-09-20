@@ -181,6 +181,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   deps_json TEXT NOT NULL DEFAULT '[]',
   milestone INTEGER NOT NULL DEFAULT 0
 );
+
+-- small key/value settings store — e.g. the GitHub owner and local code
+-- root that repo discovery was last run with, so re-running it doesn't
+-- need to be re-asked every time.
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 function clock(): string {
@@ -468,6 +476,32 @@ export class Db {
       tasks: this.listTasks(),
       logs,
     };
+  }
+
+  // ---- meta / discovery support ----
+
+  getMeta(key: string): string | null {
+    const row = this.conn.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  }
+
+  setMeta(key: string, value: string) {
+    this.conn
+      .prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .run(key, value);
+  }
+
+  // Repos are keyed by a short id, but discovery only knows the real repo
+  // name — this is how re-running discovery updates an existing row
+  // (whichever id it was seeded/discovered under) instead of creating a
+  // second one for the same repo.
+  findRepoIdByName(repoName: string): string | null {
+    const row = this.conn.prepare(`SELECT id FROM repos WHERE repo = ?`).get(repoName) as
+      | { id: string }
+      | undefined;
+    return row?.id ?? null;
   }
 
   close() {

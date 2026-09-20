@@ -20,6 +20,7 @@ import { Db } from "./db";
 import { seedIfEmpty } from "./seed";
 import { runDispatch } from "./agentRunner";
 import { INTRO_PROMPT } from "./prompts";
+import { runGithubDiscoveryAndUpsert, runLocalDiscoveryAndUpsert } from "./discover";
 
 const POLL_MS = 2000;
 
@@ -30,7 +31,10 @@ function parseArg(name: string, fallback: string): string {
 
 const dbPath = parseArg("--db", `${process.env.HOME}/.control-center/control-center.db`);
 const db = new Db(dbPath);
-seedIfEmpty(db);
+// Deliberately NOT auto-seeded anymore — an empty repos table on first
+// connect is the signal the extension uses to offer a real choice
+// ("discover from GitHub" vs "use example data") instead of silently
+// picking one for you. See seedExample/discoverGithubRepos/discoverLocalRepos below.
 
 const busy = new Set<string>();
 
@@ -40,6 +44,7 @@ function tick() {
     if (repo.paused) continue;
     if (repo.agent_status === "stopped") continue;
     if (repo.agent_status === "needsHuman") continue; // blocked on a live escalation
+    if (!repo.cwd) continue; // no local clone — nothing to run the SDK against
     const next = db.nextQueuedDispatch(repo.id);
     if (!next) continue;
     busy.add(repo.id);
@@ -113,6 +118,13 @@ function handle(req: Req): unknown {
       db.setRepoStatus(req.repoId, "stopped");
       return { ok: true };
     case "startAgent": {
+      const repo = db.getRepo(req.repoId);
+      if (!repo) throw new Error("no such repo");
+      if (!repo.cwd) {
+        throw new Error(
+          `${repo.repo} has no local clone (nothing runnable at a known path) — clone it, then run discoverGithubRepos or discoverLocalRepos again, before starting its agent.`
+        );
+      }
       if (!db.hasIntroDispatch(req.repoId)) {
         db.queueIntroDispatch(req.repoId, INTRO_PROMPT);
       }
@@ -122,6 +134,20 @@ function handle(req: Req): unknown {
     case "refreshRepoSummary":
       db.queueIntroDispatch(req.repoId, INTRO_PROMPT);
       return { ok: true };
+    case "seedExample":
+      seedIfEmpty(db);
+      return { ok: true };
+    case "discoverGithubRepos": {
+      const owner = req.owner || db.getMeta("github_owner");
+      const codeRoot = req.codeRoot || db.getMeta("code_root");
+      if (!owner || !codeRoot) throw new Error("owner and codeRoot are required");
+      return runGithubDiscoveryAndUpsert(db, owner, codeRoot);
+    }
+    case "discoverLocalRepos": {
+      const codeRoot = req.codeRoot || db.getMeta("code_root");
+      if (!codeRoot) throw new Error("codeRoot is required");
+      return runLocalDiscoveryAndUpsert(db, codeRoot);
+    }
     default:
       throw new Error(`unknown cmd: ${req.cmd}`);
   }
