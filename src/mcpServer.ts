@@ -16,6 +16,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { Db } from "./db";
+import { INTRO_PROMPT } from "./prompts";
 
 function parseArg(name: string, fallback: string): string {
   const i = process.argv.indexOf(name);
@@ -41,6 +42,13 @@ Three channels exist here, and they are not interchangeable:
   Answering a finding only records your decision — it does not notify
   the agent. Follow up with dispatch to actually hand a decision back.
 
+Before dispatching to a repo you don't already know, check list_repos'
+summary field first — it's an agent-authored self-introduction (what the
+repo is, its stack, its conventions, current git state), populated
+automatically the first time a repo is started. Empty summary usually
+means the repo has never been started, not that it has nothing to say;
+call refresh_repo_summary to get one without waiting on other work.
+
 Typical loop: list_repos to see what's tracked and its status → dispatch
 to hand a repo new work → list_open_escalations to see what's actually
 blocked and needs you → resolve_escalation to unblock it. Repo ids are
@@ -60,14 +68,14 @@ function text(obj: unknown) {
 
 server.tool(
   "list_repos",
-  "List every repo the control center tracks, with its current agent status (running/idle/needsHuman/stopped), phase, and paused-queue flag.",
+  "List every repo the control center tracks, with its current agent status (running/idle/needsHuman/stopped), phase, paused-queue flag, and its summary — an agent-authored self-introduction (what the repo is, stack, conventions, current git state), populated automatically the first time the repo is started. summary is '' if the repo has never been started; call refresh_repo_summary to get one without waiting, or to refresh a stale one.",
   {},
   async () => text(db.listRepos())
 );
 
 server.tool(
   "get_repo_status",
-  "Full status for one repo: its metadata, its dispatch queue, and its open permission escalation if it's currently blocked (agent_status: needsHuman).",
+  "Full status for one repo: its metadata (including summary — see list_repos), its dispatch queue, and its open escalation if it's currently blocked (agent_status: needsHuman).",
   { repoId: z.string().describe("The repo's short id, e.g. 'disp' for github-app-dispatcher — see list_repos.") },
   async ({ repoId }) => {
     const repo = db.getRepo(repoId);
@@ -78,6 +86,17 @@ server.tool(
       escalation: db.openEscalationForRepo(repoId),
       recentLogs: db.recentLogs(repoId, 15),
     });
+  }
+);
+
+server.tool(
+  "refresh_repo_summary",
+  "Queue a fresh self-introspection pass for a repo (see list_repos' summary field) — it jumps ahead of anything else queued and runs next, before other dispatches. Use this when a repo's summary is stale (real changes have landed since it was written) or missing (never started).",
+  { repoId: z.string().describe("The repo's short id — see list_repos.") },
+  async ({ repoId }) => {
+    const repo = db.getRepo(repoId);
+    if (!repo) return text({ error: `no such repo: ${repoId}` });
+    return text(db.queueIntroDispatch(repoId, INTRO_PROMPT));
   }
 );
 

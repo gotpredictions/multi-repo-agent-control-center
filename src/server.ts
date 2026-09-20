@@ -19,6 +19,7 @@ import * as readline from "node:readline";
 import { Db } from "./db";
 import { seedIfEmpty } from "./seed";
 import { runDispatch } from "./agentRunner";
+import { INTRO_PROMPT } from "./prompts";
 
 const POLL_MS = 2000;
 
@@ -42,7 +43,7 @@ function tick() {
     const next = db.nextQueuedDispatch(repo.id);
     if (!next) continue;
     busy.add(repo.id);
-    runDispatch(db, repo, next.id, next.text)
+    runDispatch(db, repo, next)
       .catch((err) => {
         db.appendLog(repo.id, "warn", `dispatch failed — ${err?.message ?? err}`);
       })
@@ -111,8 +112,15 @@ function handle(req: Req): unknown {
     case "stopAgent":
       db.setRepoStatus(req.repoId, "stopped");
       return { ok: true };
-    case "startAgent":
+    case "startAgent": {
+      if (!db.hasIntroDispatch(req.repoId)) {
+        db.queueIntroDispatch(req.repoId, INTRO_PROMPT);
+      }
       db.setRepoStatus(req.repoId, "idle");
+      return { ok: true };
+    }
+    case "refreshRepoSummary":
+      db.queueIntroDispatch(req.repoId, INTRO_PROMPT);
       return { ok: true };
     default:
       throw new Error(`unknown cmd: ${req.cmd}`);

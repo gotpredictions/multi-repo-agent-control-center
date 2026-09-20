@@ -19,7 +19,7 @@
 // agent just asking something in passing text — without calling
 // ask_human — is not treated as blocking; it's on the agent to actually
 // signal that it can't continue, not on us to guess from prose.
-import { Db, Repo, EscalationOption, EscalationKind } from "./db";
+import { Db, Repo, Dispatch, EscalationOption, EscalationKind } from "./db";
 import { z } from "zod";
 
 type CanUseToolResult =
@@ -59,15 +59,16 @@ const ASK_HUMAN_INSTRUCTION =
   "Only do this when you actually cannot proceed alone; if you're just reporting " +
   "finished work with nothing further required, end normally.";
 
-export async function runDispatch(
-  db: Db,
-  repo: Repo,
-  dispatchId: string,
-  text: string
-): Promise<void> {
+export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promise<void> {
+  const dispatchId = dispatch.id;
+  const text = dispatch.text;
   db.setRepoStatus(repo.id, "running");
   db.markDispatchSent(dispatchId, null);
-  db.appendLog(repo.id, "info", `dispatch received — ${text.split("\n")[0].slice(0, 80)}`);
+  db.appendLog(
+    repo.id,
+    "info",
+    `${dispatch.kind === "intro" ? "introspection " : ""}dispatch received — ${text.split("\n")[0].slice(0, 80)}`
+  );
 
   const abortController = new AbortController();
   let finalText = "";
@@ -169,6 +170,9 @@ export async function runDispatch(
   }
 
   db.setDispatchResponse(dispatchId, finalText);
+  if (dispatch.kind === "intro" && finalText) {
+    db.setRepoSummary(repo.id, finalText);
+  }
   const repoNow = db.getRepo(repo.id);
   if (repoNow && repoNow.agent_status !== "needsHuman") {
     db.setRepoStatus(repo.id, "idle");

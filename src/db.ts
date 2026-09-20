@@ -15,6 +15,7 @@ import * as path from "node:path";
 
 export type AgentStatus = "running" | "idle" | "needsHuman" | "stopped";
 export type DispatchState = "queued" | "sent";
+export type DispatchKind = "user" | "intro";
 export type FindingBy = "ai" | "wait" | "human";
 export type FindingSev = "open" | "watch" | "done";
 
@@ -26,11 +27,18 @@ export interface Repo {
   prs: string;
   agent_status: AgentStatus;
   paused: 0 | 1;
+  // Agent-authored self-introduction — what this repo is, stack, conventions,
+  // current state — populated by an automatic 'intro' dispatch the first
+  // time the repo is ever started, refreshable on demand after that. Empty
+  // until then. This is what a controller reads instead of having to guess
+  // from a repo's short id or dig through raw dispatch history.
+  summary: string;
 }
 
 export interface Dispatch {
   id: string;
   repo_id: string;
+  kind: DispatchKind;
   text: string;
   state: DispatchState;
   at: string;
@@ -111,12 +119,14 @@ CREATE TABLE IF NOT EXISTS repos (
   phase TEXT NOT NULL DEFAULT '',
   prs TEXT NOT NULL DEFAULT '',
   agent_status TEXT NOT NULL DEFAULT 'stopped',
-  paused INTEGER NOT NULL DEFAULT 0
+  paused INTEGER NOT NULL DEFAULT 0,
+  summary TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS dispatches (
   id TEXT PRIMARY KEY,
   repo_id TEXT NOT NULL REFERENCES repos(id),
+  kind TEXT NOT NULL DEFAULT 'user',
   text TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'queued',
   at TEXT NOT NULL DEFAULT '',
@@ -201,15 +211,20 @@ export class Db {
 
   // ---- repos ----
 
-  upsertRepo(r: Omit<Repo, "paused"> & { paused?: boolean }) {
+  upsertRepo(r: Omit<Repo, "paused" | "summary"> & { paused?: boolean }) {
     this.conn
       .prepare(
-        `INSERT INTO repos (id, repo, cwd, phase, prs, agent_status, paused)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO repos (id, repo, cwd, phase, prs, agent_status, paused, summary)
+         VALUES (?, ?, ?, ?, ?, ?, ?, '')
          ON CONFLICT(id) DO UPDATE SET repo=excluded.repo, cwd=excluded.cwd,
            phase=excluded.phase, prs=excluded.prs`
       )
       .run(r.id, r.repo, r.cwd, r.phase, r.prs, r.agent_status, r.paused ? 1 : 0);
+    this.changed();
+  }
+
+  setRepoSummary(id: string, summary: string) {
+    this.conn.prepare(`UPDATE repos SET summary = ? WHERE id = ?`).run(summary, id);
     this.changed();
   }
 
@@ -244,12 +259,39 @@ export class Db {
     ).n;
     this.conn
       .prepare(
-        `INSERT INTO dispatches (id, repo_id, text, state, at, response, session_id, seq)
-         VALUES (?, ?, ?, 'queued', '', '', NULL, ?)`
+        `INSERT INTO dispatches (id, repo_id, kind, text, state, at, response, session_id, seq)
+         VALUES (?, ?, 'user', ?, 'queued', '', '', NULL, ?)`
       )
       .run(id, repoId, text, seq);
     this.changed();
     return this.getDispatch(id)!;
+  }
+
+  // Queue-jumps ahead of anything already queued (even work queued while
+  // the repo was stopped) — the introspection pass is meant to run before
+  // any real work, not whenever it happens to reach the front naturally.
+  queueIntroDispatch(repoId: string, text: string): Dispatch {
+    const id = `${repoId}-intro-${Date.now()}`;
+    const seq = (
+      this.conn.prepare(`SELECT COALESCE(MIN(seq), 1) - 1 AS n FROM dispatches WHERE repo_id = ?`).get(repoId) as {
+        n: number;
+      }
+    ).n;
+    this.conn
+      .prepare(
+        `INSERT INTO dispatches (id, repo_id, kind, text, state, at, response, session_id, seq)
+         VALUES (?, ?, 'intro', ?, 'queued', '', '', NULL, ?)`
+      )
+      .run(id, repoId, text, seq);
+    this.changed();
+    return this.getDispatch(id)!;
+  }
+
+  hasIntroDispatch(repoId: string): boolean {
+    const row = this.conn
+      .prepare(`SELECT 1 AS x FROM dispatches WHERE repo_id = ? AND kind = 'intro' LIMIT 1`)
+      .get(repoId);
+    return !!row;
   }
 
   getDispatch(id: string): Dispatch | undefined {
