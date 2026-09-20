@@ -1,0 +1,1243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Control Center — editor view</title>
+<script src="{{REACT_URI}}"></script>
+<script src="{{REACT_DOM_URI}}"></script>
+<script src="{{SUPPORT_URI}}"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+html, body { margin: 0; height: 100%; }
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: #4daafc; text-decoration: none; }
+a:hover { color: #9cdcfe; text-decoration: underline; }
+button { font: inherit; }
+.cc-row { display: flex; align-items: center; padding: 7px 0; border-top: 1px solid #2b2b2b; font-size: 12.5px; }
+.cc-row:hover { background: #262626; }
+.cc-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.cc-gantt-row { display: flex; align-items: center; padding: 3px 0; font-size: 12px; }
+.cc-gantt-row:hover { background: #262626; }
+.cc-scrollx { overflow-x: auto; overflow-y: hidden; }
+/* Below this, a real VS Code webview panel can still get narrower than the
+   data wants — .cc-scrollx lets those sections scroll sideways rather than
+   clip or illegibly squish columns; there's no fixed-width artboard to fall
+   back on once this is a real, resizable, sometimes-narrow-docked panel. */
+</style>
+</helmet>
+<div style="width: 100%; height: 100vh; min-width: 480px; box-sizing: border-box; background: #1f1f1f; color: #cccccc; display: flex; flex-direction: column;">
+
+  <div style="box-sizing: border-box; padding: 18px 24px 0 24px; display: flex; flex-direction: column; gap: 16px; flex-grow: 1; min-height: 0;">
+
+    <div style="display: flex; align-items: baseline; justify-content: space-between;">
+      <div style="font-size: 14px; font-weight: 600; color: #ffffff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">multi-module-architecture-proposal</div>
+      <div style="font-size: 11.5px; color: #8b8b8b;">updated Sep 20, 14:30</div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 4px;">
+      <span style="font-size: 12.5px; color: #8b8b8b; margin-right: 4px;">Phase:</span>
+      <sc-for list="{{ flow }}" as="step" hint-placeholder-count="5">
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <span style="{{ step.sepStyle }}">›</span>
+          <button type="button" style="{{ step.style }}" onClick="{{ step.pick }}"><span style="{{ step.dotStyle }}"></span>{{ step.label }}</button>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; align-items: flex-end; gap: 22px; border-bottom: 1px solid #2b2b2b;">
+      <sc-for list="{{ tabs }}" as="tab" hint-placeholder-count="4">
+        <button type="button" style="{{ tab.style }}" onClick="{{ tab.pick }}">{{ tab.label }}</button>
+      </sc-for>
+    </div>
+
+    <div style="position: relative; flex-grow: 1; min-height: 0; overflow: hidden;">
+
+      <sc-if value="{{ composerOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position: absolute; left: -24px; right: -24px; top: -8px; bottom: 0; background: rgba(20, 20, 20, 0.88); display: flex; align-items: flex-start; justify-content: center; padding-top: 14px; z-index: 50;">
+          <div style="width: 860px; box-sizing: border-box; background: #252526; border: 1px solid #454545; border-radius: 6px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between;">
+              <div style="font-size: 12.5px; color: #ffffff;">{{ composerTitle }}</div>
+              <div class="cc-mono" style="font-size: 11px; color: #8b8b8b;">{{ composerMeta }}</div>
+            </div>
+            <textarea aria-label="Dispatch prompt" placeholder="Write the dispatch prompt for this repo's agent — context, the task, the constraints, what done looks like." value="{{ composerText }}" onChange="{{ onComposerText }}" style="{{ composerAreaStyle }}"></textarea>
+            <sc-if value="{{ composerHasResponse }}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                <span style="font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Agent response</span>
+                <div class="cc-mono" style="max-height: 74px; overflow: hidden; padding: 8px 12px; background: #1f1f1f; border: 1px solid #2f3b46; border-radius: 4px; font-size: 11.5px; line-height: 1.5; color: #9d9d9d;">{{ composerResponse }}</div>
+              </div>
+            </sc-if>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <span style="font-size: 11px; color: #8b8b8b;">{{ composerCount }}</span>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ composerCancel }}">Cancel</button>
+                <sc-if value="{{ composerCanQueue }}" hint-placeholder-val="{{ true }}">
+                  <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ composerQueue }}">{{ composerQueueLabel }}</button>
+                </sc-if>
+                <button type="button" style="{{ saveBtnStyle }}" onClick="{{ composerNow }}">{{ composerNowLabel }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isRepos }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-direction: column;">
+
+          <div style="display: flex; align-items: center; justify-content: flex-end; padding-bottom: 8px;">
+            <button type="button" style="{{ dispatchAllBtnStyle }}" onClick="{{ dispatchToAll }}">Dispatch to all queues</button>
+          </div>
+
+          <div class="cc-scrollx">
+          <div style="min-width: 620px;">
+          <div style="display: flex; align-items: center; height: 16px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
+            <div style="width: 30px;">Agent</div>
+            <div style="width: 230px;">Repo</div>
+            <div style="width: 120px;">Phase</div>
+            <div style="flex-grow: 1; min-width: 70px;">Pull requests</div>
+            <div style="width: 170px;">Dispatch queue</div>
+          </div>
+
+          <sc-for list="{{ repoRows }}" as="row" hint-placeholder-count="10">
+            <div style="position: relative; border-top: 1px solid #2b2b2b;">
+
+              <div class="cc-row" style="border-top: none; padding: 2px 0; font-size: 11.5px;">
+                <div style="width: 30px;">
+                  <button type="button" aria-label="Agent controls" style="{{ row.dotBtnStyle }}" onClick="{{ row.toggleMenu }}"><span style="{{ row.dotStyle }}"></span></button>
+                </div>
+                <div class="cc-mono" style="width: 230px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.repo }}</div>
+                <div style="width: 120px; color: #9d9d9d;">{{ row.phase }}</div>
+                <div style="flex-grow: 1; padding-right: 10px; color: #9d9d9d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.prs }}</div>
+                <div style="width: 170px;">
+                  <button type="button" style="{{ row.queueBtnStyle }}" onClick="{{ row.openDispatches }}">{{ row.queueLabel }}</button>
+                </div>
+              </div>
+
+              <sc-if value="{{ row.menuOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="{{ row.menuStyle }}">
+                  <sc-for list="{{ row.menuItems }}" as="opt" hint-placeholder-count="3">
+                    <button type="button" style="{{ opt.style }}" onClick="{{ opt.pick }}">{{ opt.label }}</button>
+                  </sc-for>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ row.dispatchOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 4px 0 10px 30px;">
+                  <div style="background: #232323; border: 1px solid #3c3c3c; border-radius: 4px; padding: 10px 12px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 6px;">
+                      <span style="font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Dispatch queue — {{ row.repo }}</span>
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <button type="button" style="{{ saveBtnStyle }}" onClick="{{ row.newDispatch }}">+ New dispatch</button>
+                        <button type="button" style="{{ row.pauseBtnStyle }}" onClick="{{ row.togglePause }}">{{ row.pauseLabel }}</button>
+                        <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ closeDrawer }}">Close</button>
+                      </div>
+                    </div>
+
+                    <sc-for list="{{ row.dispatchItems }}" as="d" hint-placeholder-count="2">
+                      <div style="display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-top: 1px solid #2f2f2f;">
+                        <div style="display: flex; align-items: flex-start; gap: 10px;">
+                          <span class="cc-mono" style="width: 16px; padding-top: 1px; font-size: 11px; color: #6e6e6e;">{{ d.num }}</span>
+                          <span class="cc-mono" style="flex-grow: 1; font-size: 11px; line-height: 1.45; color: #cccccc; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">{{ d.text }}</span>
+                          <span class="cc-mono" style="{{ d.whenStyle }}">{{ d.when }}</span>
+                          <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ d.open }}">{{ d.openLabel }}</button>
+                          <button type="button" style="{{ nowBtnStyle }}" onClick="{{ d.sendNow }}">{{ d.nowLabel }}</button>
+                        </div>
+                        <sc-if value="{{ d.hasResponse }}" hint-placeholder-val="{{ true }}">
+                          <div style="display: flex; align-items: flex-start; gap: 10px; padding-left: 26px;">
+                            <span class="cc-mono" style="font-size: 10.5px; color: #4daafc; flex-shrink: 0;">reply</span>
+                            <span style="flex-grow: 1; font-size: 11px; line-height: 1.45; color: #9d9d9d; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">{{ d.response }}</span>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ d.awaiting }}" hint-placeholder-val="{{ false }}">
+                          <div style="padding-left: 26px; font-size: 11px; color: #d7ba7d;">awaiting the agent's response…</div>
+                        </sc-if>
+                      </div>
+                    </sc-for>
+
+                    <sc-if value="{{ row.queueEmpty }}" hint-placeholder-val="{{ false }}">
+                      <div style="padding: 6px 0 0 0; font-size: 11.5px; color: #8b8b8b;">Nothing queued for this agent.</div>
+                    </sc-if>
+                  </div>
+                </div>
+              </sc-if>
+
+            </div>
+          </sc-for>
+
+          <div style="border-top: 1px solid #2b2b2b;"></div>
+          </div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 16px; padding: 10px 0 0 30px; font-size: 10.5px; color: #8b8b8b;">
+            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #89d185;"></span>running</span>
+            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #6e6e6e;"></span>idle</span>
+            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f14c4c;"></span>needs human</span>
+            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1px solid #6e6e6e;"></span>stopped</span>
+            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #6e6e6e; box-shadow: 0 0 0 2px #6b551c;"></span>dispatches paused</span>
+            <span>click a dot for start · stop · watch</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isPlan }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column;">
+
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 0 10px 0;">
+            <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Rollout sequence — fixed order, do not skip ahead</div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <sc-if value="{{ isPlanGantt }}" hint-placeholder-val="{{ true }}">
+                <button type="button" style="{{ linksBtnStyle }}" onClick="{{ toggleLinks }}"><span style="{{ linksDotStyle }}"></span>Dependency links</button>
+              </sc-if>
+              <div style="display: flex; border: 1px solid #3c3c3c; border-radius: 4px; overflow: hidden;">
+                <button type="button" style="{{ listBtnStyle }}" onClick="{{ showList }}">List</button>
+                <button type="button" style="{{ ganttBtnStyle }}" onClick="{{ showGantt }}">Gantt</button>
+              </div>
+            </div>
+          </div>
+
+          <sc-if value="{{ isPlanList }}" hint-placeholder-val="{{ true }}">
+            <div class="cc-scrollx">
+            <div style="display: flex; flex-direction: column; min-width: 560px;">
+              <div style="display: flex; align-items: center; height: 16px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
+                <div style="width: 150px;">Repo</div>
+                <div style="width: 200px;">Task</div>
+                <div style="flex-grow: 1; min-width: 60px;">Depends on</div>
+                <div style="width: 50px;">Est</div>
+                <div style="width: 100px;">Status</div>
+              </div>
+
+              <sc-for list="{{ planRows }}" as="row" hint-placeholder-count="12">
+                <div class="cc-row" style="padding: 0; height: 18px; font-size: 11.5px;">
+                  <div class="cc-mono" style="width: 150px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #9d9d9d; font-size: 11px;">{{ row.repo }}</div>
+                  <div style="width: 200px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cccccc;">{{ row.task }}</div>
+                  <div style="flex-grow: 1; padding-right: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8b8b8b;">{{ row.deps }}</div>
+                  <div style="width: 50px; color: #9d9d9d;">{{ row.est }}</div>
+                  <div style="width: 100px; display: flex; align-items: center; gap: 7px;"><span style="{{ row.dotStyle }}"></span><span style="{{ row.statusStyle }}">{{ row.statusLabel }}</span></div>
+                </div>
+              </sc-for>
+
+              <div style="border-top: 1px solid #2b2b2b;"></div>
+            </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isPlanGantt }}" hint-placeholder-val="{{ false }}">
+            <div class="cc-scrollx">
+            <div style="position: relative; min-width: 900px;">
+
+              <div style="display: flex; align-items: center; height: 16px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
+                <div style="width: 150px;">Repo</div>
+                <div style="width: 200px;">Task</div>
+                <div style="position: relative; width: 550px; height: 14px;">
+                  <sc-for list="{{ ganttTicks }}" as="tick" hint-placeholder-count="12">
+                    <span style="{{ tick.style }}">{{ tick.label }}</span>
+                  </sc-for>
+                </div>
+              </div>
+
+              <sc-for list="{{ ganttRows }}" as="row" hint-placeholder-count="12">
+                <div class="cc-gantt-row" style="padding: 0; height: 18px;">
+                  <div class="cc-mono" style="width: 150px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #9d9d9d; font-size: 11px;">{{ row.repo }}</div>
+                  <div style="width: 200px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cccccc; font-size: 11.5px;">{{ row.task }}</div>
+                  <div style="position: relative; width: 550px; height: 18px; background: repeating-linear-gradient(to right, #2b2b2b 0 1px, transparent 1px 50px);">
+                    <div style="{{ row.barStyle }}"></div>
+                  </div>
+                </div>
+              </sc-for>
+
+              <sc-if value="{{ showLinks }}" hint-placeholder-val="{{ true }}">
+                <svg width="550" height="{{ linkLayerH }}" style="position: absolute; left: 350px; top: 16px; pointer-events: none;" aria-hidden="true">
+                  <defs>
+                    <marker id="cc-dep" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+                      <path d="M0 0 L8 4 L0 8 z" fill="#7f7f7f"></path>
+                    </marker>
+                  </defs>
+                  <sc-for list="{{ ganttLinks }}" as="link" hint-placeholder-count="12">
+                    <path d="{{ link.d }}" fill="none" stroke="#6e6e6e" stroke-width="1" marker-end="url(#cc-dep)"></path>
+                  </sc-for>
+                </svg>
+              </sc-if>
+
+              <div style="display: flex; align-items: center; gap: 16px; padding: 10px 0 0 350px; font-size: 10.5px; color: #8b8b8b;">
+                <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 7px; border-radius: 2px; background: #3a6b3a;"></span>done</span>
+                <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 7px; border-radius: 2px; background: #8a6d1f;"></span>active</span>
+                <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 7px; border-radius: 2px; background: #7a3030;"></span>blocked</span>
+                <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 7px; border-radius: 2px; border: 1px dashed #5a5a5a;"></span>not started</span>
+                <span>hours of work, not calendar days — arrows are dependencies</span>
+              </div>
+            </div>
+            </div>
+          </sc-if>
+
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isFindings }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column;">
+
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 0 10px 0;">
+            <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">{{ waitingLabel }}</div>
+            <button type="button" style="{{ addBtnStyle }}" onClick="{{ toggleAdd }}">+ Add input</button>
+          </div>
+
+          <div class="cc-scrollx">
+          <div style="min-width: 560px;">
+
+          <sc-if value="{{ isAdding }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 10px; background: #232323; border: 1px solid #3c3c3c; border-radius: 4px;">
+              <input type="text" aria-label="Repo or coordinator" placeholder="coordinator" value="{{ newRepo }}" onChange="{{ onNewRepo }}" style="{{ repoInputStyle }}">
+              <input type="text" aria-label="Input for the team" placeholder="Input to be picked up — a decision, a constraint, a question" value="{{ newText }}" onChange="{{ onNewText }}" style="{{ inputStyle }}">
+              <button type="button" style="{{ saveBtnStyle }}" onClick="{{ addItem }}">Add</button>
+              <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ toggleAdd }}">Cancel</button>
+            </div>
+          </sc-if>
+
+          <div style="display: flex; align-items: center; padding: 0 0 8px 0; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
+            <div style="width: 170px;">Repo</div>
+            <div style="flex-grow: 1;">Finding or input</div>
+            <div style="width: 90px;">Phase</div>
+            <div style="width: 180px;">Disposition</div>
+            <div style="width: 130px;">Decided by</div>
+          </div>
+
+          <sc-for list="{{ findingRows }}" as="row" hint-placeholder-count="7">
+            <div style="border-top: 1px solid #2b2b2b;">
+              <div class="cc-row" style="border-top: none;">
+                <div class="cc-mono" style="width: 170px; padding-right: 10px; box-sizing: border-box; color: #9d9d9d; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.repo }}</div>
+                <div style="flex-grow: 1; padding-right: 10px; display: flex; align-items: center; gap: 9px;"><span style="{{ row.dotStyle }}"></span><span>{{ row.text }}</span></div>
+                <div style="width: 90px; color: #9d9d9d; font-size: 11.5px;">{{ row.phase }}</div>
+                <div style="width: 180px; font-size: 11.5px; color: #cccccc;">{{ row.disposition }}</div>
+                <div style="width: 130px;"><span style="{{ row.byStyle }}">{{ row.byLabel }}</span></div>
+              </div>
+
+              <sc-if value="{{ row.showAnswerBtn }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 0 0 8px 179px;">
+                  <button type="button" style="{{ answerBtnStyle }}" onClick="{{ row.startAnswer }}">Answer…</button>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ row.isAnswering }}" hint-placeholder-val="{{ false }}">
+                <div style="display: flex; align-items: center; gap: 8px; padding: 0 0 10px 179px;">
+                  <input type="text" aria-label="Your decision" placeholder="The decision to hand back to the agents" value="{{ draft }}" onChange="{{ onDraft }}" style="{{ inputStyle }}">
+                  <button type="button" style="{{ saveBtnStyle }}" onClick="{{ row.saveAnswer }}">Save</button>
+                  <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ cancelAnswer }}">Cancel</button>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ row.hasAnswer }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 0 0 8px 179px; font-size: 11.5px; color: #89d185;">Answer — {{ row.answer }}</div>
+              </sc-if>
+            </div>
+          </sc-for>
+
+          <div style="border-top: 1px solid #2b2b2b;"></div>
+          </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isLog }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column;">
+          <div style="display: flex; align-items: center; padding: 0 0 8px 0; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
+            <div style="width: 90px;">When</div>
+            <div style="flex-grow: 1;">Entry</div>
+          </div>
+
+          <div class="cc-row">
+            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
+            <div style="flex-grow: 1;">e2e-tests repo created, session up, bootstrap dispatched — 2a/2b formalization plus new 2c coverage</div>
+          </div>
+
+          <div class="cc-row">
+            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
+            <div style="flex-grow: 1;">checkProductAccess RPC built — uniform for tiered and untiered products</div>
+          </div>
+
+          <div class="cc-row">
+            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
+            <div style="flex-grow: 1;">Catalog retrofit migrated — pr-checks now fully paid, starter gap closed</div>
+          </div>
+
+          <div class="cc-row">
+            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
+            <div style="flex-grow: 1;">portal-service SUPPORT_SERVICE wiring recovered onto a fresh PR #2, merged — 2c wired end to end</div>
+          </div>
+
+          <div class="cc-row">
+            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
+            <div style="flex-grow: 1;">Rollout sequence fixed — A, then B, then C; do not skip ahead</div>
+          </div>
+
+          <div class="cc-row">
+            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 19</div>
+            <div style="flex-grow: 1;">Three repos found that were not in the original 11 — portal-service, ops-console, ui-components</div>
+          </div>
+
+          <div class="cc-row" style="border-bottom: 1px solid #2b2b2b;">
+            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 19</div>
+            <div style="flex-grow: 1;">Local wrangler dev multi-worker test passed — 2a + 2b with real token mint, zero mocks</div>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+
+  </div>
+  <sc-if value="{{ watchOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="height: 206px; box-sizing: border-box; border-top: 1px solid #2b2b2b; background: #181818; display: flex; flex-direction: column;">
+
+      <div style="display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 12px; border-bottom: 1px solid #2b2b2b;">
+        <div style="display: flex; align-items: center; gap: 10px; height: 30px;">
+          <span style="font-size: 10.5px; letter-spacing: 0.08em; color: #ffffff; border-bottom: 1px solid #0078d4; padding-bottom: 9px;">AGENT</span>
+          <span style="font-size: 10.5px; color: #6e6e6e;">replayed from the session stream — not the integrated terminal</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <select aria-label="Output channel" value="{{ watchRepoId }}" onChange="{{ onChannel }}" style="{{ selectStyle }}">
+            <sc-for list="{{ channels }}" as="c" hint-placeholder-count="10">
+              <option value="{{ c.id }}">{{ c.label }}</option>
+            </sc-for>
+          </select>
+          <button type="button" aria-label="Close panel" style="{{ panelCloseStyle }}" onClick="{{ closeWatch }}">×</button>
+        </div>
+      </div>
+
+      <div style="flex-grow: 1; min-height: 0; overflow: hidden; padding: 6px 12px;">
+        <sc-for list="{{ watchLines }}" as="line" hint-placeholder-count="7">
+          <div class="cc-mono" style="display: flex; gap: 10px; font-size: 11.5px; line-height: 1.6;">
+            <span style="color: #5a5a5a; flex-shrink: 0;">{{ line.t }}</span>
+            <span style="{{ line.tagStyle }}">{{ line.tag }}</span>
+            <span style="{{ line.textStyle }}">{{ line.text }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{ watchNeedsAnswer }}" hint-placeholder-val="{{ false }}">
+        <div style="border-top: 1px solid #2b2b2b; background: #1f1f1f; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
+
+          <div style="font-size: 11.5px; line-height: 1.5; color: #cccccc;">{{ escalationPrompt }}</div>
+
+          <sc-for list="{{ escalationOptions }}" as="opt" hint-placeholder-count="4">
+            <button type="button" style="{{ opt.rowStyle }}" onClick="{{ opt.pick }}">
+              <span class="cc-mono" style="{{ opt.numStyle }}">{{ opt.num }}</span>
+              <span style="display: flex; flex-direction: column; gap: 2px; text-align: left;">
+                <span style="{{ opt.labelStyle }}">{{ opt.label }}</span>
+                <span style="{{ opt.rationaleStyle }}">{{ opt.rationale }}</span>
+              </span>
+            </button>
+          </sc-for>
+
+          <sc-if value="{{ escalationTyping }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; align-items: center; gap: 8px; padding-top: 2px;">
+              <span class="cc-mono" style="color: #89d185; font-size: 12px;">›</span>
+              <input type="text" aria-label="Reply to the agent" placeholder="Type a decision not covered above" value="{{ escalationTypeText }}" onChange="{{ onEscalationType }}" style="{{ terminalInputStyle }}">
+              <button type="button" style="{{ saveBtnStyle }}" onClick="{{ sendEscalationType }}">Send</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{ escalationNotTyping }}" hint-placeholder-val="{{ true }}">
+            <button type="button" style="{{ typeRowStyle }}" onClick="{{ openEscalationType }}">
+              <span class="cc-mono" style="{{ typeNumStyle }}">5</span>
+              <span style="{{ typeLabelStyle }}">Type something…</span>
+            </button>
+          </sc-if>
+
+          <div style="border-top: 1px solid #2b2b2b; margin-top: 2px; padding-top: 8px; display: flex; align-items: center; justify-content: space-between;">
+            <button type="button" style="{{ chatBtnStyle }}" onClick="{{ chatAboutThis }}">Chat about this — discuss before deciding</button>
+            <span style="font-size: 10.5px; color: #6e6e6e;">requested by {{ escalationAskedBy }}</span>
+          </div>
+
+          <sc-if value="{{ escalationHasPeerNote }}" hint-placeholder-val="{{ false }}">
+            <div class="cc-mono" style="font-size: 11px; color: #8b8b8b; font-style: italic; padding-top: 2px;">{{ escalationPeerNote }}</div>
+          </sc-if>
+
+        </div>
+      </sc-if>
+
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":960,"height":640}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      tab: 'repos',
+      phase: 'implement',
+      planView: 'list',
+      showLinks: true,
+      answering: null,
+      draft: '',
+      adding: false,
+      newRepo: '',
+      newText: '',
+      menuFor: null,
+      drawerFor: null,
+      drawerMode: '',
+      composerRepo: null,
+      composerDispatch: null,
+      composerText: '',
+      watchRepo: null,
+      escalationTyping: false,
+      escalationTypeText: '',
+      logs: {
+        disp: [
+          { t: '14:22:03', tag: 'info', text: 'dispatch 1 received — recover the checkProductAccess pre-filter' },
+          { t: '14:22:19', tag: 'read', text: 'src/routing/table.ts (218 lines)' },
+          { t: '14:23:41', tag: 'bash', text: 'git log --oneline origin/main..HEAD' },
+          { t: '14:23:44', tag: 'out', text: '4 commits carry the pre-filter path' },
+          { t: '14:24:02', tag: 'warn', text: 'branch shares no ancestor with origin/main — #8 is not reachable' },
+          { t: '14:25:36', tag: 'ask', text: 'Re-cut the branch from main, or cherry-pick onto a fresh branch off #6?' }
+        ],
+        chk: [
+          { t: '14:09:52', tag: 'info', text: 'dispatch complete — checkGate wiring merged (PR #6)' },
+          { t: '14:10:04', tag: 'bash', text: 'npx vitest run src/gate.test.ts' },
+          { t: '14:10:21', tag: 'out', text: '23 passed  (1.8s)' },
+          { t: '14:10:22', tag: 'info', text: 'gate stays unforced — enforcement-levels honored' },
+          { t: '14:10:23', tag: 'idle', text: 'waiting for the next dispatch' }
+        ],
+        pr: [
+          { t: '14:16:40', tag: 'info', text: 'release-note requirement built — managed-comment enforcement' },
+          { t: '14:17:02', tag: 'bash', text: 'npx vitest run' },
+          { t: '14:17:25', tag: 'out', text: '41 passed  (3.2s)' },
+          { t: '14:18:11', tag: 'info', text: 'blocked on dispatcher #6 for routing — holding' }
+        ],
+        e2e: [
+          { t: '14:28:14', tag: 'info', text: 'bootstrap dispatched — 2a/2b formalization plus 2c coverage' },
+          { t: '14:28:30', tag: 'bash', text: 'npm install --prefix ./suite' },
+          { t: '14:29:07', tag: 'read', text: 'docs/local-dev-recipe.md' },
+          { t: '14:30:55', tag: 'out', text: 'scenario scaffold written — 6 specs stubbed' }
+        ]
+      },
+      repos: [
+        { id: 'tmpl', repo: 'worker-module-template', phase: 'Phase 1', prs: '#1–#3 merged', agent: 'idle', paused: false, questions: [], dispatches: [
+          { id: 'tmpl-1', text: 'Bootstrap the shared Worker module template: wrangler config, vitest-pool-workers setup, RPC entrypoint skeleton, and the CLAUDE.md conventions block every module inherits.', state: 'sent', at: 'Sep 19 09:12', response: 'Template landed across PRs #1–#3. Adds src/entry.ts RPC skeleton, vitest-pool-workers at compat date 2026-09-01, and the shared conventions block. All three merged.' }
+        ] },
+        { id: 'cms', repo: 'capability-management-service', phase: 'Phase 1', prs: '#1–#5 merged / in review', agent: 'idle', paused: false, questions: [], dispatches: [
+          { id: 'cms-1', text: 'Add the tenant-lifecycle RPC methods and paid-tier gating: free-plan auto-attach plus subscription_gates rows, with the catalog retrofit so untiered products are not free by default.', state: 'sent', at: 'Sep 20 11:40', response: 'PR #4 and #5 merged. Catalog retrofit moved 31 gates to paid; starter gap closed; checkProductAccess exposed as a uniform RPC for tiered and untiered products.' },
+          { id: 'cms-2', text: 'Document checkProductAccess in docs/architecture/module-registry.md — inputs, failure modes, and which callers are allowed to cache the result.', state: 'queued', at: '', response: '' }
+        ] },
+        { id: 'disp', repo: 'github-app-dispatcher', phase: 'Phase 1', prs: '#6–#8 open', agent: 'needsHuman', paused: true, questions: [{
+          id: 'q1',
+          text: "Grant contents: ['read','write'] to the ALLOWED_PERMISSIONS allowlist so pr-checks-service can mint tokens with contents:write (needed to update GitHub Release bodies)?",
+          askedBy: 'pr-checks-service',
+          options: [
+            { id: 'write-only', label: 'Approve write-only', rationale: "Add contents: ['write'] — narrower than what was asked, since updateRelease only needs write, not read" },
+            { id: 'read-write', label: 'Approve read+write', rationale: "Add contents: ['read','write'] exactly as pr-checks-service requested" },
+            { id: 'need-info', label: 'Not yet — need more info', rationale: "Hold off; verify pr-checks-service's identity/legitimacy, or think through blast radius before granting broader token scopes" },
+            { id: 'decline', label: 'Decline', rationale: "Don't add contents to the allowlist; tell pr-checks-service to find another approach" }
+          ],
+          peerNote: "Message from @pr-checks-service: That's the correct call — I wouldn't want a peer's request to be treated as approval for a security-sensitive allowlist change.",
+          answer: ''
+        }], dispatches: [
+          { id: 'disp-1', text: 'Make the Marketplace plan-ID map configurable — staging IDs from env, production left as an explicit placeholder that fails loudly rather than silently mapping to free.', state: 'sent', at: 'Sep 20 10:05', response: 'PR #7 open. Plan IDs now read from PLAN_MAP; an unknown ID throws instead of defaulting. Production IDs still placeholder — needs the real values from the Marketplace listing.' },
+          { id: 'disp-2', text: 'Context: PR #8 (product-level checkProductAccess pre-filter) was merged into a branch that is not an ancestor of main, so the pre-filter is not reachable from a deploy. The work itself was reviewed and is correct.\n\nTask: recover the change onto main. Cut a fresh branch from current main, re-apply the pre-filter commits, and open a new PR that supersedes #8. Do not force-push the orphaned branch — leave it for the record and reference it in the new PR body.\n\nConstraints: the pre-filter must stay behind the same capability lookup as #6; no new RPC surface; keep the existing tests passing without loosening the compat date.\n\nDone when: the new PR is green, references #8, and main contains the pre-filter path.', state: 'queued', at: '', response: '' },
+          { id: 'disp-3', text: 'After #6 merges, wire pr-checks-service into the dispatcher routing table and confirm the release-note gate fires end to end on a scratch repo.', state: 'queued', at: '', response: '' }
+        ] },
+        { id: 'chk', repo: 'checklist-service', phase: 'Phase 1 · 2a', prs: '#1–#6 merged', agent: 'running', paused: false, questions: [], dispatches: [
+          { id: 'chk-1', text: 'Wire CAPABILITY_SERVICE.checkGate into the checklist evaluation path. The gate stays unforced — enforcement levels decide, not the gate itself.', state: 'sent', at: 'Sep 20 09:31', response: 'PR #6 merged. checkGate consulted per evaluation, enforcement-levels honored, 23 tests pass. Found a real ceiling: write-dependent logic cannot be exercised locally without a bot token.' }
+        ] },
+        { id: 'pr', repo: 'pr-checks-service', phase: 'Phase 2 · 2b', prs: '#1–#4 merged', agent: 'running', paused: false, questions: [], dispatches: [
+          { id: 'pr-1', text: 'Build the PR release-notes requirement behind gate pr-checks.release-note-requirement, enforced through a managed comment rather than a failing check.', state: 'sent', at: 'Sep 20 08:50', response: 'PR #4 merged. Managed-comment enforcement in place, 41 tests pass. Blocked on dispatcher #6 before it can route real webhook traffic.' }
+        ] },
+        { id: 'portal', repo: 'portal-service', phase: 'Front door', prs: '#1–#2 merged', agent: 'idle', paused: false, questions: [], dispatches: [
+          { id: 'portal-1', text: 'Build the 2c-scoped slice: external OAuth across GitHub/Google/Microsoft, AuthenticatedIdentity, handleAuthenticatedRequest, and SUPPORT_SERVICE wiring.', state: 'sent', at: 'Sep 20 12:15', response: 'PRs #1 and #2 merged. External OAuth and session handling live; SUPPORT_SERVICE wiring recovered onto a fresh PR after the first attempt was lost.' }
+        ] },
+        { id: 'supp', repo: 'support-service', phase: 'Stress-test 2c', prs: '#1 merged', agent: 'idle', paused: false, questions: [], dispatches: [
+          { id: 'supp-1', text: 'Build ticket intake behind gate support.ticket-intake (id 47), served through portal-service rather than the dispatcher, with GitHub issues as the ticket store.', state: 'sent', at: 'Sep 20 13:02', response: 'PR #1 merged. handleAuthenticatedRequest plus GitHub-issue ticketing, gate 47 enforced, wired end to end through portal-service.' }
+        ] },
+        { id: 'e2e', repo: 'e2e-tests', phase: 'Rollout A', prs: '—', agent: 'running', paused: false, questions: [], dispatches: [
+          { id: 'e2e-1', text: 'Bootstrap the dedicated e2e suite spanning multiple Workers — local only, no CI for now. Formalize the 2a and 2b scenarios first, then add 2c coverage.', state: 'sent', at: 'Sep 20 14:28', response: 'Scaffold written, 6 specs stubbed. npm install had to run inside the auxiliary repo — that gap is now documented on PR #20.' },
+          { id: 'e2e-2', text: 'Add 2c ticket-intake coverage once support-service is wired: submit a ticket through portal-service and assert the GitHub issue appears with the right labels.', state: 'queued', at: '', response: '' }
+        ] },
+        { id: 'sec', repo: 'security-compliance-service', phase: 'Phase 2', prs: '—', agent: 'stopped', paused: false, questions: [], dispatches: [
+          { id: 'sec-1', text: 'Bootstrap from worker-module-template and stub the dependabot-alert-gate. Do not start until the Phase 1 sign-off gate clears.', state: 'queued', at: '', response: '' }
+        ] },
+        { id: 'road', repo: 'roadmap-service', phase: 'Phase 2', prs: '—', agent: 'stopped', paused: false, questions: [], dispatches: [] }
+      ],
+      items: [
+        { id: 'f1', repo: 'github-app-dispatcher', text: 'PR #8 merged into an orphaned branch — not reachable from main', phase: 'Implement', disposition: 'Refix dispatched', by: 'ai', sev: 'open', answer: '' },
+        { id: 'f2', repo: 'coordinator', text: 'roadmap_ideas_db vs. per-service _db naming mismatch', phase: 'Plan', disposition: 'Naming call needed', by: 'wait', sev: 'open', answer: '' },
+        { id: 'f3', repo: 'github-app-dispatcher', text: 'Marketplace plan-ID map — prod IDs still placeholder', phase: 'Closing', disposition: 'Needs the real plan IDs', by: 'wait', sev: 'open', answer: '' },
+        { id: 'f4', repo: 'checklist-service', text: 'Local testing ceiling — write-dependent logic needs a bot token', phase: 'Implement', disposition: 'Documented, accepted', by: 'ai', sev: 'watch', answer: '' },
+        { id: 'f5', repo: 'coordinator', text: 'OAuth work dispatched to the wrong repo', phase: 'Critique', disposition: 'Withdrawn, moved to portal-service', by: 'ai', sev: 'done', answer: '' },
+        { id: 'f6', repo: 'pr-checks-service', text: 'vitest-pool-workers compat-date ceiling', phase: 'Implement', disposition: 'Fixed in PR #3', by: 'ai', sev: 'done', answer: '' },
+        { id: 'f7', repo: 'capability-mgmt-service', text: 'Subscription invariant did not hold — catalog was free by default', phase: 'Plan', disposition: 'Retrofit merged', by: 'human', sev: 'done', answer: 'Gate the whole catalog; keep starter free' }
+      ]
+    };
+  }
+
+  renderVals() {
+    var self = this;
+    var tab = this.state.tab || 'repos';
+    var phase = this.state.phase || 'implement';
+    var planView = this.state.planView || 'list';
+    var showLinks = this.state.showLinks !== false;
+
+    var phaseDefs = [
+      { id: 'critique', label: 'Critique' },
+      { id: 'plan', label: 'Plan' },
+      { id: 'implement', label: 'Implement' },
+      { id: 'closing', label: 'Closing' },
+      { id: 'done', label: 'Done' }
+    ];
+    var current = 0;
+    for (var i = 0; i < phaseDefs.length; i++) {
+      if (phaseDefs[i].id === phase) { current = i; }
+    }
+    var stepBase = 'display: flex; align-items: center; gap: 7px; padding: 4px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; ';
+    var dotBase = 'width: 7px; height: 7px; border-radius: 50%; ';
+    var flow = phaseDefs.map(function (p, i) {
+      var skin, dot;
+      if (i < current) {
+        skin = 'border: 1px solid #2f4a2f; background: #1c2a1c; color: #89d185;';
+        dot = dotBase + 'background: #89d185;';
+      } else if (i === current) {
+        skin = 'border: 1px solid #0078d4; background: #0078d4; color: #ffffff; font-weight: 600;';
+        dot = dotBase + 'background: #ffffff;';
+      } else {
+        skin = 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;';
+        dot = dotBase + 'border: 1px solid #6e6e6e;';
+      }
+      return {
+        label: p.label,
+        style: stepBase + skin,
+        dotStyle: dot,
+        sepStyle: i === 0
+          ? 'display: none;'
+          : 'font-size: 15px; color: #5a5a5a; padding: 0 2px;',
+        pick: function () { self.setState({ phase: p.id }); }
+      };
+    });
+
+    var tabDefs = [
+      { id: 'plan', label: 'Plan' },
+      { id: 'repos', label: 'Repos' },
+      { id: 'findings', label: 'Findings & inputs' },
+      { id: 'log', label: 'Log' }
+    ];
+    var tabBase = 'padding: 0 0 8px 0; border: none; background: none; font-size: 12.5px; cursor: pointer; ';
+    var tabs = tabDefs.map(function (t) {
+      var active = t.id === tab;
+      return {
+        label: t.label,
+        style: tabBase + (active
+          ? 'border-bottom: 2px solid #0078d4; color: #ffffff; font-weight: 600;'
+          : 'border-bottom: 2px solid transparent; color: #9d9d9d;'),
+        pick: function () { self.setState({ tab: t.id }); }
+      };
+    });
+
+    var segBase = 'padding: 3px 12px; border: none; font-size: 11.5px; cursor: pointer; ';
+    var segOn = 'background: #0078d4; color: #ffffff;';
+    var segOff = 'background: transparent; color: #9d9d9d;';
+
+    var pxH = 12.5;
+    var rowH = 18;
+    var ganttTicks = [];
+    for (var h = 0; h <= 40; h += 4) {
+      ganttTicks.push({
+        label: h + 'h',
+        style: 'position: absolute; left: ' + (h * pxH + 3) + 'px; top: 0;'
+      });
+    }
+
+    var fills = {
+      done: 'background: #3a6b3a; border: 1px solid #4d874d;',
+      active: 'background: #8a6d1f; border: 1px solid #b08c28;',
+      blocking: 'background: #7a3030; border: 1px solid #a34141;',
+      todo: 'background: #262626; border: 1px dashed #5a5a5a;'
+    };
+    var taskDefs = [
+      { id: 'tmpl', repo: 'worker-module-template', task: 'Bootstrap template', start: 0, dur: 3, status: 'done', deps: [] },
+      { id: 'cms', repo: 'capability-mgmt-service', task: 'Tenant RPC + paid-tier gating', start: 0, dur: 4, status: 'done', deps: [] },
+      { id: 'disp', repo: 'github-app-dispatcher', task: 'Webhook receipt + routing', start: 4, dur: 3, status: 'done', deps: ['tmpl', 'cms'] },
+      { id: 'chk', repo: 'checklist-service', task: 'checkGate wiring (2a)', start: 4, dur: 3, status: 'done', deps: ['tmpl'] },
+      { id: 'local', repo: 'multi-worker', task: 'wrangler dev test, zero mocks', start: 7, dur: 2, status: 'done', deps: ['disp', 'chk'] },
+      { id: 'pr', repo: 'pr-checks-service', task: 'Release-note requirement (2b)', start: 9, dur: 3, status: 'done', deps: ['cms'] },
+      { id: 'portal', repo: 'portal-service', task: 'External OAuth slice for 2c', start: 9, dur: 4, status: 'done', deps: ['tmpl'] },
+      { id: 'prrt', repo: 'github-app-dispatcher', task: 'Wire pr-checks routing — #6', start: 12, dur: 2, status: 'active', deps: ['pr'] },
+      { id: 'docs', repo: 'signed-off-app', task: 'dev-docs redistribution', start: 12, dur: 4, status: 'active', deps: ['disp'] },
+      { id: 'alert', repo: 'native-ops-alerting', task: 'Plan-mapping failure alert', start: 12, dur: 3, status: 'blocking', deps: ['disp'] },
+      { id: 'supp', repo: 'support-service', task: 'Ticket intake via portal (2c)', start: 13, dur: 3, status: 'done', deps: ['portal'] },
+      { id: 'prod', repo: 'github-app-dispatcher', task: 'checkProductAccess refix — #8', start: 15, dur: 2, status: 'blocking', deps: ['cms'] },
+      { id: 'e2e', repo: 'e2e-tests', task: 'Bootstrap suite — 2a/2b/2c', start: 15, dur: 4, status: 'active', deps: ['local'] },
+      { id: 'ra', repo: 'rollout', task: 'Phase A — wrangler testing', start: 19, dur: 5, status: 'active', deps: ['e2e'] },
+      { id: 'rb', repo: 'rollout', task: 'Phase B — CF account + staging org', start: 24, dur: 4, status: 'blocking', deps: ['ra'] },
+      { id: 'wire', repo: 'dispatcher + checklist', task: 'Deploy to scratch hostname', start: 28, dur: 3, status: 'todo', deps: ['rb'] },
+      { id: 'rc', repo: 'signed-off-app', task: 'Phase C — cutover', start: 31, dur: 4, status: 'todo', deps: ['wire'] },
+      { id: 'gate', repo: '—', task: 'Phase 1 sign-off gate', start: 35, dur: 0, status: 'todo', milestone: true, deps: ['rc'] },
+      { id: 'p2s', repo: 'security-compliance-svc', task: 'dependabot-alert-gate', start: 35, dur: 4, status: 'todo', deps: ['gate'] },
+      { id: 'p2r', repo: 'roadmap-service', task: 'public-ideas-board', start: 39, dur: 4, status: 'todo', deps: ['p2s'] }
+    ];
+
+    var indexById = {};
+    taskDefs.forEach(function (t, i) { indexById[t.id] = i; });
+
+    var statusLabels = { done: 'Done', active: 'Active', blocking: 'Blocked', todo: 'Not started' };
+    var statusTextColors = { done: '#89d185', active: '#d7ba7d', blocking: '#f48771', todo: '#9d9d9d' };
+    var statusDotColors = { done: '#89d185', active: '#cca700', blocking: '#f14c4c' };
+    var planRows = taskDefs.map(function (t) {
+      var deps = (t.deps || []).map(function (id) {
+        var d = taskDefs[indexById[id]];
+        return d ? d.task : id;
+      }).join(' · ');
+      return {
+        repo: t.repo,
+        task: t.task,
+        deps: deps || '—',
+        est: t.milestone ? '—' : t.dur + 'h',
+        statusLabel: statusLabels[t.status],
+        statusStyle: 'color: ' + statusTextColors[t.status] + ';',
+        dotStyle: 'width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; '
+          + (statusDotColors[t.status]
+            ? 'background: ' + statusDotColors[t.status] + ';'
+            : 'border: 1px solid #6e6e6e;')
+      };
+    });
+
+    var ganttRows = taskDefs.map(function (t) {
+      var left = Math.round(t.start * pxH);
+      var style;
+      if (t.milestone) {
+        style = 'position: absolute; left: ' + left + 'px; top: 4px; width: 9px; height: 9px; background: #cccccc; transform: rotate(45deg);';
+      } else {
+        style = 'position: absolute; left: ' + left + 'px; top: 4px; height: 10px; width: '
+          + Math.max(Math.round(t.dur * pxH) - 3, 8) + 'px; border-radius: 3px; box-sizing: border-box; '
+          + fills[t.status];
+      }
+      return { repo: t.repo, task: t.task, barStyle: style };
+    });
+
+    var ganttLinks = [];
+    taskDefs.forEach(function (t, i) {
+      (t.deps || []).forEach(function (depId) {
+        var j = indexById[depId];
+        if (j === undefined) { return; }
+        var dep = taskDefs[j];
+        var x1 = Math.round((dep.start + (dep.milestone ? 0 : dep.dur)) * pxH) + (dep.milestone ? 9 : -2);
+        var y1 = j * rowH + 9;
+        var x2 = Math.round(t.start * pxH) - 3;
+        var y2 = i * rowH + 9;
+        var elbow = Math.max(x1 + 6, x2 - 6);
+        ganttLinks.push({ d: 'M' + x1 + ' ' + y1 + ' H' + elbow + ' V' + y2 + ' H' + x2 });
+      });
+    });
+
+    var repos = this.state.repos || [];
+    var menuFor = this.state.menuFor;
+    var drawerFor = this.state.drawerFor;
+    var drawerMode = this.state.drawerMode || '';
+    var composerRepo = this.state.composerRepo || null;
+    var composerDispatch = this.state.composerDispatch || null;
+    var composerText = this.state.composerText || '';
+    var composerAll = this.state.composerScope === 'all';
+    var composerRepoObj = null;
+    repos.forEach(function (r) { if (r.id === composerRepo) { composerRepoObj = r; } });
+    var composerItem = null;
+    if (composerRepoObj && composerDispatch) {
+      composerRepoObj.dispatches.forEach(function (x) { if (x.id === composerDispatch) { composerItem = x; } });
+    }
+    var composerSent = !!composerItem && composerItem.state === 'sent';
+    var composerEditable = !!composerItem && composerItem.state === 'queued';
+    var composerResponse = composerItem ? composerItem.response : '';
+
+    var watchRepo = this.state.watchRepo || null;
+    var watchObj = null;
+    repos.forEach(function (r) { if (r.id === watchRepo) { watchObj = r; } });
+    var logs = this.state.logs || {};
+
+    function clock() {
+      var d = new Date();
+      function pad(n) { return (n < 10 ? '0' : '') + n; }
+      return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    var tagColors = {
+      info: '#9d9d9d', read: '#4daafc', bash: '#c586c0', out: '#cccccc',
+      warn: '#d7ba7d', ask: '#f48771', you: '#89d185', idle: '#6e6e6e'
+    };
+    var idleLines = {
+      running: [{ t: clock(), tag: 'info', text: 'streaming — nothing buffered yet' }],
+      idle: [{ t: clock(), tag: 'idle', text: 'agent idle — no output since the last dispatch' }],
+      stopped: [{ t: clock(), tag: 'idle', text: 'session stopped — start the agent to attach' }],
+      needsHuman: [{ t: clock(), tag: 'ask', text: 'waiting on a human' }]
+    };
+    var watchLines = [];
+    if (watchObj) {
+      var raw = logs[watchObj.id] && logs[watchObj.id].length ? logs[watchObj.id] : idleLines[watchObj.agent];
+      watchLines = raw.slice(-7).map(function (l) {
+        return {
+          t: l.t,
+          tag: l.tag,
+          tagStyle: 'width: 34px; flex-shrink: 0; color: ' + (tagColors[l.tag] || '#9d9d9d') + ';',
+          textStyle: 'color: ' + (l.tag === 'ask' ? '#f48771' : (l.tag === 'you' ? '#89d185' : '#cccccc'))
+            + '; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'
+        };
+      }).map(function (l, i) {
+        l.text = raw.slice(-7)[i].text;
+        return l;
+      });
+    }
+
+    function assign(obj, patch) {
+      var copy = {};
+      Object.keys(obj).forEach(function (k) { copy[k] = obj[k]; });
+      Object.keys(patch).forEach(function (k) { copy[k] = patch[k]; });
+      return copy;
+    }
+
+    var escalationQuestion = null;
+    if (watchObj && watchObj.agent === 'needsHuman') {
+      (watchObj.questions || []).forEach(function (q) {
+        if (!escalationQuestion && !q.answer) { escalationQuestion = q; }
+      });
+    }
+    var escalationTyping = this.state.escalationTyping === true;
+    var escalationTypeText = this.state.escalationTypeText || '';
+
+    function resolveEscalation(choiceLabel) {
+      if (!watchObj || !escalationQuestion) { return; }
+      var stamp = clock();
+      var nextLogs = {};
+      Object.keys(logs).forEach(function (k) { nextLogs[k] = logs[k]; });
+      nextLogs[watchObj.id] = (logs[watchObj.id] || []).concat([
+        { t: stamp, tag: 'you', text: choiceLabel },
+        { t: stamp, tag: 'info', text: 'decision received — resuming' }
+      ]);
+      var qId = escalationQuestion.id;
+      self.setState({
+        logs: nextLogs,
+        escalationTyping: false,
+        escalationTypeText: '',
+        repos: patchRepo(watchObj.id, function (c) {
+          c.agent = 'running';
+          c.questions = (c.questions || []).map(function (q) {
+            return q.id === qId ? assign(q, { answer: choiceLabel }) : q;
+          });
+        })
+      });
+    }
+
+    var escalationOptStyle = 'display: flex; align-items: flex-start; gap: 10px; width: 100%; box-sizing: border-box; padding: 4px 6px; border: none; border-radius: 3px; background: none; text-align: left; cursor: pointer;';
+    var escalationNumStyle = 'width: 16px; flex-shrink: 0; padding-top: 1px; font-size: 11px; color: #6e6e6e;';
+    var escalationOptions = escalationQuestion ? escalationQuestion.options.map(function (opt, i) {
+      return {
+        num: i + 1,
+        numStyle: escalationNumStyle,
+        rowStyle: escalationOptStyle,
+        labelStyle: 'font-size: 12px; color: #ffffff; font-weight: 600;',
+        rationaleStyle: 'font-size: 11px; color: #8b8b8b; line-height: 1.4;',
+        label: opt.label,
+        rationale: opt.rationale,
+        pick: function () { resolveEscalation(opt.label); }
+      };
+    }) : [];
+
+    function closeComposer() {
+      self.setState({ composerRepo: null, composerDispatch: null, composerText: '', composerScope: '' });
+    }
+
+    function dispatchNow(targets, dispatchId, text) {
+      var stamp = 'Sep 20 ' + clock().slice(0, 5);
+      var nextLogs = {};
+      Object.keys(logs).forEach(function (k) { nextLogs[k] = logs[k]; });
+      var nextRepos = repos.map(function (r) {
+        if (targets.indexOf(r.id) === -1) { return r; }
+        var copy = {};
+        Object.keys(r).forEach(function (k) { copy[k] = r[k]; });
+        var target = null;
+        r.dispatches.forEach(function (x) { if (dispatchId && x.id === dispatchId) { target = x; } });
+        var body = (text || (target ? target.text : '')).trim();
+        if (!body) { return r; }
+        if (target && target.state === 'queued') {
+          copy.dispatches = r.dispatches.map(function (x) {
+            return x.id === dispatchId
+              ? { id: x.id, text: body, state: 'sent', at: stamp, response: '' }
+              : x;
+          });
+        } else {
+          copy.dispatches = r.dispatches.concat([{
+            id: r.id + '-n' + r.dispatches.length + '-' + body.length,
+            text: body,
+            state: 'sent',
+            at: stamp,
+            response: ''
+          }]);
+        }
+        nextLogs[r.id] = (nextLogs[r.id] || []).concat([{
+          t: clock(),
+          tag: 'info',
+          text: (target && target.state === 'sent' ? 're-dispatched — ' : 'dispatched ahead of the queue — ')
+            + body.split('\n')[0].slice(0, 54)
+        }]);
+        return copy;
+      });
+      return { repos: nextRepos, logs: nextLogs };
+    }
+
+    function commitComposer(now) {
+      var text = (self.state.composerText || '').trim();
+      if (!text) { closeComposer(); return; }
+      var targets = composerAll ? repos.map(function (r) { return r.id; }) : (composerRepo ? [composerRepo] : []);
+      if (!targets.length) { closeComposer(); return; }
+
+      if (now) {
+        var sent = dispatchNow(targets, composerAll ? null : composerDispatch, text);
+        self.setState({
+          repos: sent.repos,
+          logs: sent.logs,
+          composerRepo: null,
+          composerDispatch: null,
+          composerText: '',
+          composerScope: '',
+          drawerFor: composerAll ? null : composerRepo,
+          drawerMode: composerAll ? '' : 'dispatches',
+          watchRepo: composerAll ? self.state.watchRepo : composerRepo
+        });
+        return;
+      }
+
+      var nextRepos = repos.map(function (r) {
+        if (targets.indexOf(r.id) === -1) { return r; }
+        var copy = {};
+        Object.keys(r).forEach(function (k) { copy[k] = r[k]; });
+        var editable = false;
+        r.dispatches.forEach(function (x) {
+          if (!composerAll && x.id === composerDispatch && x.state === 'queued') { editable = true; }
+        });
+        if (editable) {
+          copy.dispatches = r.dispatches.map(function (x) {
+            return x.id === composerDispatch
+              ? { id: x.id, text: text, state: x.state, at: x.at, response: x.response }
+              : x;
+          });
+        } else {
+          copy.dispatches = r.dispatches.concat([{
+            id: r.id + '-n' + r.dispatches.length + '-' + text.length,
+            text: text,
+            state: 'queued',
+            at: '',
+            response: ''
+          }]);
+        }
+        return copy;
+      });
+
+      self.setState({
+        repos: nextRepos,
+        composerRepo: null,
+        composerDispatch: null,
+        composerText: '',
+        composerScope: '',
+        drawerFor: composerAll ? null : composerRepo,
+        drawerMode: composerAll ? '' : 'dispatches'
+      });
+    }
+
+    function patchRepo(id, fn) {
+      return repos.map(function (r) {
+        if (r.id !== id) { return r; }
+        var copy = {};
+        Object.keys(r).forEach(function (k) { copy[k] = r[k]; });
+        fn(copy);
+        return copy;
+      });
+    }
+
+    var agentDots = {
+      running: 'background: #89d185;',
+      idle: 'background: #6e6e6e;',
+      needsHuman: 'background: #f14c4c;',
+      stopped: 'border: 1px solid #6e6e6e;'
+    };
+    var menuItemStyle = 'display: block; width: 100%; box-sizing: border-box; text-align: left; padding: 5px 12px; border: none; background: none; color: #cccccc; font-size: 11.5px; cursor: pointer;';
+    var smallGhost = 'padding: 2px 8px; border-radius: 3px; font-size: 11px; cursor: pointer; ';
+
+    var repoRows = repos.map(function (r, i) {
+      var queued = r.dispatches.filter(function (d) { return d.state === 'queued'; }).length;
+      var menuItems = [];
+      if (r.agent === 'stopped') {
+        menuItems.push({
+          label: 'Start agent',
+          pick: function () { self.setState({ repos: patchRepo(r.id, function (c) { c.agent = 'running'; }), menuFor: null }); }
+        });
+      } else {
+        menuItems.push({
+          label: r.agent === 'needsHuman' ? 'Watch — answer the question' : 'Watch output',
+          pick: function () { self.setState({ watchRepo: r.id, menuFor: null, escalationTyping: false, escalationTypeText: '' }); }
+        });
+        menuItems.push({
+          label: 'Stop agent',
+          pick: function () {
+            self.setState({
+              repos: patchRepo(r.id, function (c) { c.agent = 'stopped'; }),
+              menuFor: null,
+              drawerFor: drawerFor === r.id ? null : drawerFor
+            });
+          }
+        });
+      }
+      menuItems.push({
+        label: r.paused ? 'Resume dispatches' : 'Pause dispatches',
+        pick: function () { self.setState({ repos: patchRepo(r.id, function (c) { c.paused = !c.paused; }), menuFor: null }); }
+      });
+      menuItems.push({
+        label: 'Dispatch now…',
+        pick: function () { self.setState({ composerRepo: r.id, composerDispatch: null, composerText: '', composerScope: '', menuFor: null }); }
+      });
+      menuItems.push({
+        label: 'Open dispatch queue',
+        pick: function () { self.setState({ drawerFor: r.id, drawerMode: 'dispatches', menuFor: null }); }
+      });
+
+      return {
+        repo: r.repo,
+        phase: r.phase,
+        prs: r.prs,
+        dotStyle: 'display: block; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box; '
+          + agentDots[r.agent] + (r.paused ? ' box-shadow: 0 0 0 2px #6b551c;' : ''),
+        dotBtnStyle: 'display: flex; align-items: center; justify-content: center; width: 22px; height: 20px; padding: 0; border: none; background: none; cursor: pointer;',
+        toggleMenu: function () { self.setState({ menuFor: menuFor === r.id ? null : r.id }); },
+        menuOpen: menuFor === r.id,
+        menuStyle: 'position: absolute; left: 4px; ' + (i > 5 ? 'bottom: 22px;' : 'top: 22px;')
+          + ' min-width: 190px; padding: 4px 0; background: #252526; border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); z-index: 20;',
+        menuItems: menuItems.map(function (m) { return { label: m.label, style: menuItemStyle, pick: m.pick }; }),
+
+        queueLabel: r.dispatches.length === 0
+          ? 'none'
+          : (queued + ' queued' + (r.paused ? ' · paused' : '')),
+        queueBtnStyle: smallGhost + 'border: 1px solid #3c3c3c; background: transparent; color: '
+          + (r.paused ? '#d7ba7d;' : (queued > 0 ? '#cccccc;' : '#8b8b8b;')),
+        openDispatches: function () { self.setState({ drawerFor: r.id, drawerMode: 'dispatches', menuFor: null }); },
+        dispatchOpen: drawerFor === r.id && drawerMode === 'dispatches',
+        pauseLabel: r.paused ? 'Resume queue' : 'Pause queue',
+        pauseBtnStyle: smallGhost + (r.paused
+          ? 'border: 1px solid #6b551c; background: #2a2412; color: #d7ba7d;'
+          : 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;'),
+        togglePause: function () { self.setState({ repos: patchRepo(r.id, function (c) { c.paused = !c.paused; }) }); },
+
+        queueEmpty: r.dispatches.length === 0,
+        dispatchItems: r.dispatches.map(function (d, n) {
+          var sent = d.state === 'sent';
+          return {
+            num: n + 1,
+            text: d.text,
+            when: sent ? (d.at || 'sent') : (r.paused ? 'held' : 'queued'),
+            whenStyle: 'font-size: 10.5px; color: ' + (sent ? '#8b8b8b' : (r.paused ? '#d7ba7d' : '#89d185')) + '; flex-shrink: 0;',
+            hasResponse: sent && !!d.response,
+            awaiting: sent && !d.response,
+            response: d.response,
+            openLabel: sent ? 'View' : 'Edit',
+            open: function () {
+              self.setState({ composerRepo: r.id, composerDispatch: d.id, composerText: d.text, composerScope: '', menuFor: null });
+            },
+            sendNow: function () {
+              var out = dispatchNow([r.id], d.id, null);
+              self.setState({ repos: out.repos, logs: out.logs, watchRepo: r.id, menuFor: null });
+            },
+            nowLabel: sent ? 'Re-dispatch' : 'Dispatch now'
+          };
+        }),
+        newDispatch: function () {
+          self.setState({ composerRepo: r.id, composerDispatch: null, composerText: '', menuFor: null });
+        },
+
+      };
+    });
+
+    var items = this.state.items || [];
+    var answering = this.state.answering;
+    var draft = this.state.draft || '';
+    var adding = this.state.adding === true;
+    var newRepo = this.state.newRepo || '';
+    var newText = this.state.newText || '';
+
+    function patchItem(id, patch) {
+      return items.map(function (it) {
+        if (it.id !== id) { return it; }
+        var copy = {};
+        Object.keys(it).forEach(function (k) { copy[k] = it[k]; });
+        Object.keys(patch).forEach(function (k) { copy[k] = patch[k]; });
+        return copy;
+      });
+    }
+
+    var sevColors = { open: '#f14c4c', watch: '#cca700', done: '#89d185' };
+    var byBase = 'display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 10px; font-size: 11px; ';
+    var bySkins = {
+      ai: 'border: 1px solid #2f4257; background: #16283a; color: #4daafc;',
+      wait: 'border: 1px solid #6b551c; background: #2a2412; color: #d7ba7d;',
+      human: 'border: 1px solid #2f4a2f; background: #1c2a1c; color: #89d185;'
+    };
+    var byLabels = { ai: 'AI', wait: 'Waiting — human', human: 'Human' };
+
+    var findingRows = items.map(function (it) {
+      return {
+        repo: it.repo,
+        text: it.text,
+        phase: it.phase,
+        disposition: it.disposition,
+        byLabel: byLabels[it.by] || it.by,
+        byStyle: byBase + (bySkins[it.by] || bySkins.ai),
+        dotStyle: 'width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: ' + (sevColors[it.sev] || '#6e6e6e') + ';',
+        showAnswerBtn: it.by === 'wait' && answering !== it.id,
+        isAnswering: answering === it.id,
+        hasAnswer: !!it.answer,
+        answer: it.answer,
+        startAnswer: function () { self.setState({ answering: it.id, draft: '' }); },
+        saveAnswer: function () {
+          var text = (self.state.draft || '').trim();
+          if (!text) { self.setState({ answering: null }); return; }
+          self.setState({
+            items: patchItem(it.id, { answer: text, by: 'human', sev: 'watch', disposition: 'Answered — dispatch pending' }),
+            answering: null,
+            draft: ''
+          });
+        }
+      };
+    });
+
+    var waitingCount = items.filter(function (it) { return it.by === 'wait'; }).length;
+    var fieldStyle = 'box-sizing: border-box; height: 26px; padding: 0 8px; background: #1f1f1f; border: 1px solid #3c3c3c; border-radius: 3px; color: #cccccc; font-size: 11.5px; ';
+    var smallBtn = 'padding: 4px 12px; border-radius: 3px; font-size: 11.5px; cursor: pointer; ';
+
+    return {
+      flow: flow,
+      tabs: tabs,
+      isPlan: tab === 'plan',
+      isRepos: tab === 'repos',
+      isFindings: tab === 'findings',
+      isLog: tab === 'log',
+      isPlanList: planView === 'list',
+      isPlanGantt: planView === 'gantt',
+      listBtnStyle: segBase + (planView === 'list' ? segOn : segOff),
+      ganttBtnStyle: segBase + (planView === 'gantt' ? segOn : segOff),
+      showList: function () { self.setState({ planView: 'list' }); },
+      showGantt: function () { self.setState({ planView: 'gantt' }); },
+      showLinks: showLinks,
+      toggleLinks: function () { self.setState({ showLinks: !showLinks }); },
+      linksBtnStyle: 'display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 4px; font-size: 11.5px; cursor: pointer; '
+        + (showLinks
+          ? 'border: 1px solid #0078d4; background: #12324a; color: #cccccc;'
+          : 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;'),
+      linksDotStyle: 'width: 7px; height: 7px; border-radius: 50%; '
+        + (showLinks ? 'background: #4daafc;' : 'border: 1px solid #6e6e6e;'),
+      repoRows: repoRows,
+      closeDrawer: function () { self.setState({ drawerFor: null, drawerMode: '' }); },
+      dispatchToAll: function () {
+        self.setState({ composerScope: 'all', composerRepo: null, composerDispatch: null, composerText: '', menuFor: null });
+      },
+
+      composerOpen: composerAll || !!composerRepoObj,
+      composerTitle: composerAll
+        ? 'New dispatch — every repo'
+        : (composerDispatch ? 'Edit dispatch' : 'New dispatch'),
+      composerMeta: composerAll
+        ? repos.length + ' queues · paused queues hold it until resumed'
+        : (composerRepoObj ? composerRepoObj.repo + (composerRepoObj.paused ? '  ·  queue paused' : '') : ''),
+      composerText: composerText,
+      composerCount: composerText.length + ' characters',
+      composerQueueLabel: composerEditable ? 'Save to queue' : 'Add to queue',
+      composerCanQueue: composerAll || !composerSent,
+      composerNowLabel: composerSent ? 'Re-dispatch now' : (composerAll ? 'Dispatch now to all' : 'Dispatch now'),
+      composerHasResponse: !!composerResponse,
+      composerResponse: composerResponse,
+      composerAreaStyle: 'box-sizing: border-box; width: 100%; height: 252px; padding: 10px 12px; background: #1f1f1f; border: 1px solid #3c3c3c; border-radius: 4px; color: #cccccc; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; resize: none;',
+      onComposerText: function (e) { self.setState({ composerText: e.target.value }); },
+      composerCancel: closeComposer,
+      composerQueue: function () { commitComposer(false); },
+      composerNow: function () { commitComposer(true); },
+
+      watchOpen: !!watchObj,
+      watchRepoId: watchRepo || '',
+      channels: repos.map(function (r) { return { id: r.id, label: 'Control Center: ' + r.repo }; }),
+      onChannel: function (e) { self.setState({ watchRepo: e.target.value, answerText: '' }); },
+      closeWatch: function () { self.setState({ watchRepo: null }); },
+      watchLines: watchLines,
+      watchNeedsAnswer: !!watchObj && watchObj.agent === 'needsHuman',
+      selectStyle: 'height: 20px; max-width: 250px; padding: 0 6px; background: #313131; border: 1px solid #3c3c3c; border-radius: 3px; color: #cccccc; font-size: 11px;',
+      panelCloseStyle: 'width: 20px; height: 20px; padding: 0; border: none; background: none; color: #9d9d9d; font-size: 14px; cursor: pointer;',
+      terminalInputStyle: 'box-sizing: border-box; flex-grow: 1; height: 24px; padding: 0 8px; background: #1f1f1f; border: 1px solid #3c3c3c; border-radius: 3px; color: #cccccc; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px;',
+
+      escalationPrompt: escalationQuestion ? escalationQuestion.text : '',
+      escalationOptions: escalationOptions,
+      escalationAskedBy: escalationQuestion ? escalationQuestion.askedBy : '',
+      escalationHasPeerNote: !!(escalationQuestion && escalationQuestion.peerNote),
+      escalationPeerNote: escalationQuestion ? escalationQuestion.peerNote : '',
+      escalationTyping: escalationTyping,
+      escalationNotTyping: !escalationTyping,
+      escalationTypeText: escalationTypeText,
+      onEscalationType: function (e) { self.setState({ escalationTypeText: e.target.value }); },
+      openEscalationType: function () { self.setState({ escalationTyping: true }); },
+      sendEscalationType: function () {
+        var text = (self.state.escalationTypeText || '').trim();
+        if (!text) { return; }
+        resolveEscalation(text);
+      },
+      typeRowStyle: escalationOptStyle,
+      typeNumStyle: escalationNumStyle,
+      typeLabelStyle: 'font-size: 11.5px; color: #9d9d9d;',
+      chatAboutThis: function () {
+        if (!watchObj) { return; }
+        var stamp = clock();
+        var nextLogs = {};
+        Object.keys(logs).forEach(function (k) { nextLogs[k] = logs[k]; });
+        nextLogs[watchObj.id] = (logs[watchObj.id] || []).concat([
+          { t: stamp, tag: 'you', text: "let's discuss this before I decide" },
+          { t: stamp, tag: 'info', text: 'opened for discussion — still waiting on a decision' }
+        ]);
+        self.setState({ logs: nextLogs });
+      },
+      chatBtnStyle: smallGhost + 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;',
+      nowBtnStyle: smallGhost + 'border: 1px solid #0f4a78; background: #12324a; color: #9cdcfe;',
+      dispatchAllBtnStyle: 'padding: 4px 12px; border-radius: 3px; border: 1px solid #3c3c3c; background: transparent; color: #cccccc; font-size: 11.5px; cursor: pointer;',
+
+      planRows: planRows,
+      ganttTicks: ganttTicks,
+      ganttRows: ganttRows,
+      ganttLinks: ganttLinks,
+      linkLayerH: taskDefs.length * rowH,
+
+      findingRows: findingRows,
+      waitingLabel: waitingCount === 1
+        ? 'Findings & inputs — 1 waiting on a human'
+        : 'Findings & inputs — ' + waitingCount + ' waiting on a human',
+      draft: draft,
+      onDraft: function (e) { self.setState({ draft: e.target.value }); },
+      cancelAnswer: function () { self.setState({ answering: null, draft: '' }); },
+      isAdding: adding,
+      newRepo: newRepo,
+      newText: newText,
+      onNewRepo: function (e) { self.setState({ newRepo: e.target.value }); },
+      onNewText: function (e) { self.setState({ newText: e.target.value }); },
+      toggleAdd: function () { self.setState({ adding: !adding, newRepo: '', newText: '' }); },
+      addItem: function () {
+        var text = (self.state.newText || '').trim();
+        if (!text) { self.setState({ adding: false }); return; }
+        var repo = (self.state.newRepo || '').trim() || 'coordinator';
+        var next = items.concat([{
+          id: 'u' + items.length + '-' + text.length,
+          repo: repo,
+          text: text,
+          phase: phaseDefs[current].label,
+          disposition: 'Triage — not yet assessed',
+          by: 'human',
+          sev: 'watch',
+          answer: ''
+        }]);
+        self.setState({ items: next, adding: false, newRepo: '', newText: '' });
+      },
+      inputStyle: fieldStyle + 'flex-grow: 1; min-width: 200px;',
+      repoInputStyle: fieldStyle + 'width: 170px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;',
+      addBtnStyle: smallBtn + 'border: 1px solid #3c3c3c; background: transparent; color: #cccccc;',
+      answerBtnStyle: smallBtn + 'border: 1px solid #6b551c; background: #2a2412; color: #d7ba7d;',
+      saveBtnStyle: smallBtn + 'border: 1px solid #0078d4; background: #0078d4; color: #ffffff;',
+      cancelBtnStyle: smallBtn + 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;'
+    };
+  }
+}
+</script>
+</body>
+</html>
