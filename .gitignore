@@ -2,3 +2,5 @@ node_modules/
 out/
 *.vsix
 *.db
+*.db-wal
+*.db-shm
