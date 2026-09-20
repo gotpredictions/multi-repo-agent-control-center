@@ -3,12 +3,19 @@
   "displayName": "Multi-Repo Agent Control Center",
   "description": "Local dashboard for coordinating coding-agent sessions across multiple repos.",
   "version": "0.0.1",
+  "publisher": "local-dev",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "local"
+  },
   "engines": {
     "vscode": "^1.90.0",
     "node": ">=22.5.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [],
   "main": "./out/extension.js",
   "bin": {
@@ -28,7 +35,8 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package": "npm run compile && vsce package -o control-center.vsix"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.278",
@@ -38,6 +46,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.9.2",
     "typescript": "^5.4.0"
   }
 }
