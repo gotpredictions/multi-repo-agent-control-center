@@ -1,0 +1,30 @@
+{
+  "name": "multi-repo-agent-control-center",
+  "displayName": "Multi-Repo Agent Control Center",
+  "description": "Local dashboard for coordinating coding-agent sessions across multiple repos.",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "multiRepoAgentControlCenter.openDashboard",
+        "title": "Agent Control Center: Open Dashboard"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
