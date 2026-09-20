@@ -40,17 +40,37 @@ own design conversation for why):
   way, or items it surfaced that are waiting on a human. Answering one here only records the
   decision; relaying it back to the agent is a separate, later dispatch.
 
+**No hardcoded repo list.** The tracked repo set starts empty and only ever grows through something
+that actually happened — never a bundled fixture (see `src/discover.ts`):
+- **Sibling scan** (`discoverLocalRepos` / MCP `discover_local_repos`) — no network, no `gh`, no
+  auth. Scans a directory for git repos and tracks whatever it finds.
+- **GitHub discovery** (`discoverGithubRepos` / MCP `discover_github_repos`) — asks the
+  already-authenticated `gh` CLI what exists for an owner, cross-references against local clones,
+  and surfaces repos that exist remotely but aren't cloned yet (`cwd: ''`, flagged not hidden).
+
+Either, both, or neither — both upsert onto an existing row by repo name, so re-running never
+duplicates, and neither blanks a real `cwd` just because that particular pass didn't find it.
+`startAgent` refuses a repo with `cwd: ''` rather than running the SDK against a bogus path.
+
+**Repo self-introduction, not a hand-maintained description either.** The first time a repo is
+started, a synthetic `intro` dispatch queue-jumps ahead of anything else queued and asks the agent
+to describe the repo itself (stack, conventions, current git state — see `src/prompts.ts`); the
+result lands in `repos.summary`, surfaced by `list_repos`/`get_repo_status`. Refreshable on demand
+via `refresh_repo_summary`. Verified end-to-end against a real repo — the summary correctly flagged
+one as half-bootstrapped template scaffolding before any real dispatch hit that surprise.
+
 ## Known limitations (v1, ad hoc)
 
 - The webview does a full HTML re-render on every DB change rather than patching state in place —
   transient UI (an open menu, an open dispatch drawer) resets on each update.
-- "Dispatch now" vs "queue" both land as an ordinary FIFO-queued dispatch; there's no queue-jump.
+- "Dispatch now" vs "queue" both land as an ordinary FIFO-queued dispatch; there's no queue-jump
+  (the `intro` dispatch is the one deliberate exception — see above).
 - Editing an already-queued dispatch's text lands as a new queued dispatch, not an in-place edit.
 - "Chat about this" on an escalation just opens the free-text answer box — there's no real
   sub-conversation thread.
-- `agentRunner.ts`'s calls into `@anthropic-ai/claude-agent-sdk` are written against its documented
-  `query()`/custom-tool shape, not verified against a real end-to-end SDK run yet. Errors there
-  surface as `warn` log lines against the repo and the daemon's own stderr, not a silent hang.
+- GitHub discovery's "capabilities" are shallow on purpose (exists + locally runnable, plus
+  archived/private/description) — it does not try to infer stack or purpose; that's `summary`'s job
+  once a repo is actually started.
 
 ## Dev
 
@@ -60,11 +80,13 @@ npm run compile
 ```
 
 Then `F5` in VS Code to launch an Extension Development Host, and run
-**"Agent Control Center: Open Dashboard"** from the command palette.
+**"Agent Control Center: Open Dashboard"** from the command palette. With nothing tracked yet,
+you'll be asked how to populate it (sibling scan, GitHub discovery, or skip) — nothing runs
+without you choosing it.
 
-Repos start `stopped` (seeded that way deliberately — nothing runs real Agent SDK sessions against
-real repos until you explicitly start one from the dot menu). Queue a dispatch, start the agent,
-and watch the Watch panel.
+Discovered repos start `stopped` (deliberately — nothing runs real Agent SDK sessions against real
+repos until you explicitly start one from the dot menu, which also queues that repo's first
+`summary` pass). Queue a dispatch, start the agent, and watch the Watch panel.
 
 ### Registering the MCP server with a coordinator session
 

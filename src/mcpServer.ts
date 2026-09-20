@@ -15,9 +15,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { Db } from "./db";
 import { INTRO_PROMPT } from "./prompts";
 import { runGithubDiscoveryAndUpsert, runLocalDiscoveryAndUpsert } from "./discover";
+import { startAgent, stopAgent } from "./repoActions";
 
 function parseArg(name: string, fallback: string): string {
   const i = process.argv.indexOf(name);
@@ -43,9 +46,22 @@ Three channels exist here, and they are not interchangeable:
   Answering a finding only records your decision — it does not notify
   the agent. Follow up with dispatch to actually hand a decision back.
 
-If list_repos looks incomplete or stale — a repo you know exists isn't
-there, or one that should have a local clone by now still shows
-cwd: '' — call discover_local_repos (fast, no network, finds what's
+Repos start (and stay) stopped until something starts them — a dispatch
+queued against a stopped repo just sits there, unread, until it is. If
+you know a repo needs to actually pick up work now, call start_agent on
+it yourself rather than assuming dispatch alone is enough or waiting for
+a human to click Start in the dashboard.
+
+You don't have to wait for the user to run a scan to make a repo known.
+If you already know a repo exists — you just created it, or you're
+certain of its name and (if it has one yet) local path — call add_repo
+directly instead of asking for discover_local_repos/discover_github_repos
+to be run. Those two are for bulk/unknown sync; add_repo is for the one
+repo you already know about right now.
+
+If list_repos looks incomplete or stale in bulk — several repos you know
+exist aren't there, or ones that should have a local clone by now still
+show cwd: '' — call discover_local_repos (fast, no network, finds what's
 already cloned) or discover_github_repos (needs \`gh\`, also finds repos
 that exist remotely but aren't cloned yet) to resync, rather than
 assuming this tool's picture is current. It only tracks what it's been
@@ -164,7 +180,71 @@ server.tool(
         queued: db.queueDispatch(repoId, body),
       });
     }
+    if (repo.agent_status === "stopped") {
+      return text({
+        error: `${repo.repo} is stopped — this dispatch has been queued, but nothing will pick it up until its agent is started. Call start_agent on ${repoId} to actually run it.`,
+        queued: db.queueDispatch(repoId, body),
+      });
+    }
     return text(db.queueDispatch(repoId, body));
+  }
+);
+
+server.tool(
+  "add_repo",
+  "Register a single repo you already know about — you just created it, or you're certain of its name and path — without running a full discovery scan. If cwd is omitted, or given but not actually a git repo there, the repo is still tracked (cwd: '', not runnable yet) rather than rejected; call this again once it has a real local clone, or use discover_local_repos/discover_github_repos.",
+  {
+    repo: z.string().describe("The repo's real name, e.g. 'e2e-tests'."),
+    cwd: z.string().optional().describe("Local path to the clone, if one exists yet."),
+    phase: z.string().optional().describe("Free-text phase/role label, shown in the dashboard."),
+  },
+  async ({ repo, cwd, phase }) => {
+    const id = db.findRepoIdByName(repo) ?? repo;
+    const existing = db.getRepo(id);
+    let resolvedCwd = existing?.cwd || "";
+    let warning: string | null = null;
+    if (cwd) {
+      if (fs.existsSync(path.join(cwd, ".git"))) {
+        resolvedCwd = cwd;
+      } else {
+        warning = `${cwd} doesn't look like a git repo (no .git found) — tracked with cwd: '' instead.`;
+      }
+    }
+    db.upsertRepo({
+      id,
+      repo,
+      cwd: resolvedCwd,
+      phase: phase || existing?.phase || (resolvedCwd ? "" : "Added — not cloned locally"),
+      prs: existing?.prs || "—",
+      agent_status: existing?.agent_status || "stopped",
+    });
+    return text({ ...db.getRepo(id), warning });
+  }
+);
+
+server.tool(
+  "start_agent",
+  "Start a repo's agent so it actually begins picking up its queued dispatches — a stopped repo's queue just sits there untouched. Also queues that repo's first self-introduction pass if it hasn't had one (see list_repos' summary field). Fails if the repo has no local clone (cwd: '') — use add_repo with a real cwd, or discover_local_repos/discover_github_repos, first.",
+  { repoId: z.string().describe("The repo's short id — see list_repos.") },
+  async ({ repoId }) => {
+    try {
+      return text(startAgent(db, repoId));
+    } catch (err: any) {
+      return text({ error: err?.message ?? String(err) });
+    }
+  }
+);
+
+server.tool(
+  "stop_agent",
+  "Stop a repo's agent — it stops picking up new dispatches until started again. Does not cancel or interrupt anything already running.",
+  { repoId: z.string().describe("The repo's short id — see list_repos.") },
+  async ({ repoId }) => {
+    try {
+      return text(stopAgent(db, repoId));
+    } catch (err: any) {
+      return text({ error: err?.message ?? String(err) });
+    }
   }
 );
 

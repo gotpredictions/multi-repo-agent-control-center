@@ -169,14 +169,13 @@ export function activate(context: vscode.ExtensionContext) {
       ? path.dirname(vscode.workspace.workspaceFolders[0].uri.fsPath)
       : "";
 
-    // All three optional, all skippable — none of this runs unless
-    // explicitly chosen. GitHub and sibling-scan discovery are independent
-    // (either, both, or neither), not a fallback chain.
+    // Both optional, both skippable — neither runs unless explicitly
+    // chosen, and they're independent (either, both, or neither), not a
+    // fallback chain.
     const choice = await vscode.window.showInformationMessage(
       "No repos tracked yet. How do you want to set this up?",
       "Use sibling repos",
       "Discover from GitHub",
-      "Use example data",
       "Skip"
     );
     if (choice === "Use sibling repos") {
@@ -210,8 +209,6 @@ export function activate(context: vscode.ExtensionContext) {
       } catch (err: any) {
         vscode.window.showErrorMessage(`Discovery failed: ${err?.message ?? err}`);
       }
-    } else if (choice === "Use example data") {
-      await runner.call("seedExample");
     }
     // "Skip", or the picker dismissed: leave it empty. Both discovery modes
     // are also reachable later from an MCP-connected coordinator.

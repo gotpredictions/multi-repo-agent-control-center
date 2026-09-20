@@ -17,10 +17,10 @@
 // dispatch into a real Agent SDK run; the MCP server just enqueues rows.
 import * as readline from "node:readline";
 import { Db } from "./db";
-import { seedIfEmpty } from "./seed";
 import { runDispatch } from "./agentRunner";
 import { INTRO_PROMPT } from "./prompts";
 import { runGithubDiscoveryAndUpsert, runLocalDiscoveryAndUpsert } from "./discover";
+import { startAgent, stopAgent } from "./repoActions";
 
 const POLL_MS = 2000;
 
@@ -31,10 +31,9 @@ function parseArg(name: string, fallback: string): string {
 
 const dbPath = parseArg("--db", `${process.env.HOME}/.control-center/control-center.db`);
 const db = new Db(dbPath);
-// Deliberately NOT auto-seeded anymore — an empty repos table on first
-// connect is the signal the extension uses to offer a real choice
-// ("discover from GitHub" vs "use example data") instead of silently
-// picking one for you. See seedExample/discoverGithubRepos/discoverLocalRepos below.
+// No seed data of any kind — an empty repos table on first connect is the
+// signal the extension uses to offer real discovery (see
+// discoverGithubRepos/discoverLocalRepos below), not a hardcoded list.
 
 const busy = new Set<string>();
 
@@ -115,27 +114,11 @@ function handle(req: Req): unknown {
       return { ok: true };
     }
     case "stopAgent":
-      db.setRepoStatus(req.repoId, "stopped");
-      return { ok: true };
-    case "startAgent": {
-      const repo = db.getRepo(req.repoId);
-      if (!repo) throw new Error("no such repo");
-      if (!repo.cwd) {
-        throw new Error(
-          `${repo.repo} has no local clone (nothing runnable at a known path) — clone it, then run discoverGithubRepos or discoverLocalRepos again, before starting its agent.`
-        );
-      }
-      if (!db.hasIntroDispatch(req.repoId)) {
-        db.queueIntroDispatch(req.repoId, INTRO_PROMPT);
-      }
-      db.setRepoStatus(req.repoId, "idle");
-      return { ok: true };
-    }
+      return stopAgent(db, req.repoId);
+    case "startAgent":
+      return startAgent(db, req.repoId);
     case "refreshRepoSummary":
       db.queueIntroDispatch(req.repoId, INTRO_PROMPT);
-      return { ok: true };
-    case "seedExample":
-      seedIfEmpty(db);
       return { ok: true };
     case "discoverGithubRepos": {
       const owner = req.owner || db.getMeta("github_owner");
