@@ -2,7 +2,7 @@
   "name": "multi-repo-agent-control-center",
   "displayName": "Multi-Repo Agent Control Center",
   "description": "Local dashboard for coordinating coding-agent sessions across multiple repos.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "local-dev",
   "private": true,
   "repository": {
@@ -30,6 +30,10 @@
       {
         "command": "multiRepoAgentControlCenter.restartRunner",
         "title": "Agent Control Center: Restart Runner"
+      },
+      {
+        "command": "multiRepoAgentControlCenter.resetAllData",
+        "title": "Agent Control Center: Reset All Data"
       }
     ]
   },

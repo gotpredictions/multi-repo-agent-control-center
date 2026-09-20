@@ -460,29 +460,6 @@ button { font: inherit; }
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":960,"height":640}}'>
-var FALLBACK_TASK_DEFS = [
-  { id: 'tmpl', repo: 'worker-module-template', task: 'Bootstrap template', start: 0, dur: 3, status: 'done', deps: [] },
-  { id: 'cms', repo: 'capability-mgmt-service', task: 'Tenant RPC + paid-tier gating', start: 0, dur: 4, status: 'done', deps: [] },
-  { id: 'disp', repo: 'github-app-dispatcher', task: 'Webhook receipt + routing', start: 4, dur: 3, status: 'done', deps: ['tmpl', 'cms'] },
-  { id: 'chk', repo: 'checklist-service', task: 'checkGate wiring (2a)', start: 4, dur: 3, status: 'done', deps: ['tmpl'] },
-  { id: 'local', repo: 'multi-worker', task: 'wrangler dev test, zero mocks', start: 7, dur: 2, status: 'done', deps: ['disp', 'chk'] },
-  { id: 'pr', repo: 'pr-checks-service', task: 'Release-note requirement (2b)', start: 9, dur: 3, status: 'done', deps: ['cms'] },
-  { id: 'portal', repo: 'portal-service', task: 'External OAuth slice for 2c', start: 9, dur: 4, status: 'done', deps: ['tmpl'] },
-  { id: 'prrt', repo: 'github-app-dispatcher', task: 'Wire pr-checks routing — #6', start: 12, dur: 2, status: 'active', deps: ['pr'] },
-  { id: 'docs', repo: 'signed-off-app', task: 'dev-docs redistribution', start: 12, dur: 4, status: 'active', deps: ['disp'] },
-  { id: 'alert', repo: 'native-ops-alerting', task: 'Plan-mapping failure alert', start: 12, dur: 3, status: 'blocking', deps: ['disp'] },
-  { id: 'supp', repo: 'support-service', task: 'Ticket intake via portal (2c)', start: 13, dur: 3, status: 'done', deps: ['portal'] },
-  { id: 'prod', repo: 'github-app-dispatcher', task: 'checkProductAccess refix — #8', start: 15, dur: 2, status: 'blocking', deps: ['cms'] },
-  { id: 'e2e', repo: 'e2e-tests', task: 'Bootstrap suite — 2a/2b/2c', start: 15, dur: 4, status: 'active', deps: ['local'] },
-  { id: 'ra', repo: 'rollout', task: 'Phase A — wrangler testing', start: 19, dur: 5, status: 'active', deps: ['e2e'] },
-  { id: 'rb', repo: 'rollout', task: 'Phase B — CF account + staging org', start: 24, dur: 4, status: 'blocking', deps: ['ra'] },
-  { id: 'wire', repo: 'dispatcher + checklist', task: 'Deploy to scratch hostname', start: 28, dur: 3, status: 'todo', deps: ['rb'] },
-  { id: 'rc', repo: 'signed-off-app', task: 'Phase C — cutover', start: 31, dur: 4, status: 'todo', deps: ['wire'] },
-  { id: 'gate', repo: '—', task: 'Phase 1 sign-off gate', start: 35, dur: 0, status: 'todo', milestone: true, deps: ['rc'] },
-  { id: 'p2s', repo: 'security-compliance-svc', task: 'dependabot-alert-gate', start: 35, dur: 4, status: 'todo', deps: ['gate'] },
-  { id: 'p2r', repo: 'roadmap-service', task: 'public-ideas-board', start: 39, dur: 4, status: 'todo', deps: ['p2s'] }
-];
-
 var __bootstrap = (typeof window !== 'undefined' && window.__CC_BOOTSTRAP__) || null;
 var __vscode = (typeof acquireVsCodeApi === 'function') ? acquireVsCodeApi() : null;
 function notifyHost(msg) {
@@ -511,92 +488,14 @@ class Component extends DCLogic {
       watchRepo: null,
       escalationTyping: false,
       escalationTypeText: '',
-      taskDefs: __bootstrap ? __bootstrap.tasks : FALLBACK_TASK_DEFS,
-      logs: __bootstrap ? __bootstrap.logs : {
-        disp: [
-          { t: '14:22:03', tag: 'info', text: 'dispatch 1 received — recover the checkProductAccess pre-filter' },
-          { t: '14:22:19', tag: 'read', text: 'src/routing/table.ts (218 lines)' },
-          { t: '14:23:41', tag: 'bash', text: 'git log --oneline origin/main..HEAD' },
-          { t: '14:23:44', tag: 'out', text: '4 commits carry the pre-filter path' },
-          { t: '14:24:02', tag: 'warn', text: 'branch shares no ancestor with origin/main — #8 is not reachable' },
-          { t: '14:25:36', tag: 'ask', text: 'Re-cut the branch from main, or cherry-pick onto a fresh branch off #6?' }
-        ],
-        chk: [
-          { t: '14:09:52', tag: 'info', text: 'dispatch complete — checkGate wiring merged (PR #6)' },
-          { t: '14:10:04', tag: 'bash', text: 'npx vitest run src/gate.test.ts' },
-          { t: '14:10:21', tag: 'out', text: '23 passed  (1.8s)' },
-          { t: '14:10:22', tag: 'info', text: 'gate stays unforced — enforcement-levels honored' },
-          { t: '14:10:23', tag: 'idle', text: 'waiting for the next dispatch' }
-        ],
-        pr: [
-          { t: '14:16:40', tag: 'info', text: 'release-note requirement built — managed-comment enforcement' },
-          { t: '14:17:02', tag: 'bash', text: 'npx vitest run' },
-          { t: '14:17:25', tag: 'out', text: '41 passed  (3.2s)' },
-          { t: '14:18:11', tag: 'info', text: 'blocked on dispatcher #6 for routing — holding' }
-        ],
-        e2e: [
-          { t: '14:28:14', tag: 'info', text: 'bootstrap dispatched — 2a/2b formalization plus 2c coverage' },
-          { t: '14:28:30', tag: 'bash', text: 'npm install --prefix ./suite' },
-          { t: '14:29:07', tag: 'read', text: 'docs/local-dev-recipe.md' },
-          { t: '14:30:55', tag: 'out', text: 'scenario scaffold written — 6 specs stubbed' }
-        ]
-      },
-      repos: __bootstrap ? __bootstrap.repos : [
-        { id: 'tmpl', repo: 'worker-module-template', phase: 'Phase 1', prs: '#1–#3 merged', agent: 'idle', paused: false, questions: [], dispatches: [
-          { id: 'tmpl-1', text: 'Bootstrap the shared Worker module template: wrangler config, vitest-pool-workers setup, RPC entrypoint skeleton, and the CLAUDE.md conventions block every module inherits.', state: 'sent', at: 'Sep 19 09:12', response: 'Template landed across PRs #1–#3. Adds src/entry.ts RPC skeleton, vitest-pool-workers at compat date 2026-09-01, and the shared conventions block. All three merged.' }
-        ] },
-        { id: 'cms', repo: 'capability-management-service', phase: 'Phase 1', prs: '#1–#5 merged / in review', agent: 'idle', paused: false, questions: [], dispatches: [
-          { id: 'cms-1', text: 'Add the tenant-lifecycle RPC methods and paid-tier gating: free-plan auto-attach plus subscription_gates rows, with the catalog retrofit so untiered products are not free by default.', state: 'sent', at: 'Sep 20 11:40', response: 'PR #4 and #5 merged. Catalog retrofit moved 31 gates to paid; starter gap closed; checkProductAccess exposed as a uniform RPC for tiered and untiered products.' },
-          { id: 'cms-2', text: 'Document checkProductAccess in docs/architecture/module-registry.md — inputs, failure modes, and which callers are allowed to cache the result.', state: 'queued', at: '', response: '' }
-        ] },
-        { id: 'disp', repo: 'github-app-dispatcher', phase: 'Phase 1', prs: '#6–#8 open', agent: 'needsHuman', paused: true, questions: [{
-          id: 'q1',
-          text: "Grant contents: ['read','write'] to the ALLOWED_PERMISSIONS allowlist so pr-checks-service can mint tokens with contents:write (needed to update GitHub Release bodies)?",
-          kind: 'permission',
-          askedBy: 'pr-checks-service',
-          options: [
-            { id: 'write-only', label: 'Approve write-only', rationale: "Add contents: ['write'] — narrower than what was asked, since updateRelease only needs write, not read" },
-            { id: 'read-write', label: 'Approve read+write', rationale: "Add contents: ['read','write'] exactly as pr-checks-service requested" },
-            { id: 'need-info', label: 'Not yet — need more info', rationale: "Hold off; verify pr-checks-service's identity/legitimacy, or think through blast radius before granting broader token scopes" },
-            { id: 'decline', label: 'Decline', rationale: "Don't add contents to the allowlist; tell pr-checks-service to find another approach" }
-          ],
-          peerNote: "Message from @pr-checks-service: That's the correct call — I wouldn't want a peer's request to be treated as approval for a security-sensitive allowlist change.",
-          answer: ''
-        }], dispatches: [
-          { id: 'disp-1', text: 'Make the Marketplace plan-ID map configurable — staging IDs from env, production left as an explicit placeholder that fails loudly rather than silently mapping to free.', state: 'sent', at: 'Sep 20 10:05', response: 'PR #7 open. Plan IDs now read from PLAN_MAP; an unknown ID throws instead of defaulting. Production IDs still placeholder — needs the real values from the Marketplace listing.' },
-          { id: 'disp-2', text: 'Context: PR #8 (product-level checkProductAccess pre-filter) was merged into a branch that is not an ancestor of main, so the pre-filter is not reachable from a deploy. The work itself was reviewed and is correct.\n\nTask: recover the change onto main. Cut a fresh branch from current main, re-apply the pre-filter commits, and open a new PR that supersedes #8. Do not force-push the orphaned branch — leave it for the record and reference it in the new PR body.\n\nConstraints: the pre-filter must stay behind the same capability lookup as #6; no new RPC surface; keep the existing tests passing without loosening the compat date.\n\nDone when: the new PR is green, references #8, and main contains the pre-filter path.', state: 'queued', at: '', response: '' },
-          { id: 'disp-3', text: 'After #6 merges, wire pr-checks-service into the dispatcher routing table and confirm the release-note gate fires end to end on a scratch repo.', state: 'queued', at: '', response: '' }
-        ] },
-        { id: 'chk', repo: 'checklist-service', phase: 'Phase 1 · 2a', prs: '#1–#6 merged', agent: 'running', paused: false, questions: [], dispatches: [
-          { id: 'chk-1', text: 'Wire CAPABILITY_SERVICE.checkGate into the checklist evaluation path. The gate stays unforced — enforcement levels decide, not the gate itself.', state: 'sent', at: 'Sep 20 09:31', response: 'PR #6 merged. checkGate consulted per evaluation, enforcement-levels honored, 23 tests pass. Found a real ceiling: write-dependent logic cannot be exercised locally without a bot token.' }
-        ] },
-        { id: 'pr', repo: 'pr-checks-service', phase: 'Phase 2 · 2b', prs: '#1–#4 merged', agent: 'running', paused: false, questions: [], dispatches: [
-          { id: 'pr-1', text: 'Build the PR release-notes requirement behind gate pr-checks.release-note-requirement, enforced through a managed comment rather than a failing check.', state: 'sent', at: 'Sep 20 08:50', response: 'PR #4 merged. Managed-comment enforcement in place, 41 tests pass. Blocked on dispatcher #6 before it can route real webhook traffic.' }
-        ] },
-        { id: 'portal', repo: 'portal-service', phase: 'Front door', prs: '#1–#2 merged', agent: 'idle', paused: false, questions: [], dispatches: [
-          { id: 'portal-1', text: 'Build the 2c-scoped slice: external OAuth across GitHub/Google/Microsoft, AuthenticatedIdentity, handleAuthenticatedRequest, and SUPPORT_SERVICE wiring.', state: 'sent', at: 'Sep 20 12:15', response: 'PRs #1 and #2 merged. External OAuth and session handling live; SUPPORT_SERVICE wiring recovered onto a fresh PR after the first attempt was lost.' }
-        ] },
-        { id: 'supp', repo: 'support-service', phase: 'Stress-test 2c', prs: '#1 merged', agent: 'idle', paused: false, questions: [], dispatches: [
-          { id: 'supp-1', text: 'Build ticket intake behind gate support.ticket-intake (id 47), served through portal-service rather than the dispatcher, with GitHub issues as the ticket store.', state: 'sent', at: 'Sep 20 13:02', response: 'PR #1 merged. handleAuthenticatedRequest plus GitHub-issue ticketing, gate 47 enforced, wired end to end through portal-service.' }
-        ] },
-        { id: 'e2e', repo: 'e2e-tests', phase: 'Rollout A', prs: '—', agent: 'running', paused: false, questions: [], dispatches: [
-          { id: 'e2e-1', text: 'Bootstrap the dedicated e2e suite spanning multiple Workers — local only, no CI for now. Formalize the 2a and 2b scenarios first, then add 2c coverage.', state: 'sent', at: 'Sep 20 14:28', response: 'Scaffold written, 6 specs stubbed. npm install had to run inside the auxiliary repo — that gap is now documented on PR #20.' },
-          { id: 'e2e-2', text: 'Add 2c ticket-intake coverage once support-service is wired: submit a ticket through portal-service and assert the GitHub issue appears with the right labels.', state: 'queued', at: '', response: '' }
-        ] },
-        { id: 'sec', repo: 'security-compliance-service', phase: 'Phase 2', prs: '—', agent: 'stopped', paused: false, questions: [], dispatches: [
-          { id: 'sec-1', text: 'Bootstrap from worker-module-template and stub the dependabot-alert-gate. Do not start until the Phase 1 sign-off gate clears.', state: 'queued', at: '', response: '' }
-        ] },
-        { id: 'road', repo: 'roadmap-service', phase: 'Phase 2', prs: '—', agent: 'stopped', paused: false, questions: [], dispatches: [] }
-      ],
-      items: __bootstrap ? __bootstrap.items : [
-        { id: 'f1', repo: 'github-app-dispatcher', text: 'PR #8 merged into an orphaned branch — not reachable from main', phase: 'Implement', disposition: 'Refix dispatched', by: 'ai', sev: 'open', answer: '' },
-        { id: 'f2', repo: 'coordinator', text: 'roadmap_ideas_db vs. per-service _db naming mismatch', phase: 'Plan', disposition: 'Naming call needed', by: 'wait', sev: 'open', answer: '' },
-        { id: 'f3', repo: 'github-app-dispatcher', text: 'Marketplace plan-ID map — prod IDs still placeholder', phase: 'Closing', disposition: 'Needs the real plan IDs', by: 'wait', sev: 'open', answer: '' },
-        { id: 'f4', repo: 'checklist-service', text: 'Local testing ceiling — write-dependent logic needs a bot token', phase: 'Implement', disposition: 'Documented, accepted', by: 'ai', sev: 'watch', answer: '' },
-        { id: 'f5', repo: 'coordinator', text: 'OAuth work dispatched to the wrong repo', phase: 'Critique', disposition: 'Withdrawn, moved to portal-service', by: 'ai', sev: 'done', answer: '' },
-        { id: 'f6', repo: 'pr-checks-service', text: 'vitest-pool-workers compat-date ceiling', phase: 'Implement', disposition: 'Fixed in PR #3', by: 'ai', sev: 'done', answer: '' },
-        { id: 'f7', repo: 'capability-mgmt-service', text: 'Subscription invariant did not hold — catalog was free by default', phase: 'Plan', disposition: 'Retrofit merged', by: 'human', sev: 'done', answer: 'Gate the whole catalog; keep starter free' }
-      ]
+      // No fallback canned data — opening this file without a real
+      // extension-injected window.__CC_BOOTSTRAP__ (e.g. previewing the
+      // raw HTML in a browser) now just shows a genuinely empty dashboard,
+      // not a fake initiative.
+      taskDefs: __bootstrap ? __bootstrap.tasks : [],
+      logs: __bootstrap ? __bootstrap.logs : {},
+      repos: __bootstrap ? __bootstrap.repos : [],
+      items: __bootstrap ? __bootstrap.items : []
     };
   }
 
@@ -681,7 +580,7 @@ class Component extends DCLogic {
       blocking: 'background: #7a3030; border: 1px solid #a34141;',
       todo: 'background: #262626; border: 1px dashed #5a5a5a;'
     };
-    var taskDefs = this.state.taskDefs || FALLBACK_TASK_DEFS;
+    var taskDefs = this.state.taskDefs || [];
 
     var indexById = {};
     taskDefs.forEach(function (t, i) { indexById[t.id] = i; });

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as cp from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 
@@ -139,12 +140,7 @@ export function activate(context: vscode.ExtensionContext) {
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
   const serverScript = path.join(context.extensionUri.fsPath, "out", "server.js");
   const dbPath = path.join(context.globalStorageUri.fsPath, "control-center.db");
-
-  // Deliberately "node" from PATH, not process.execPath — inside the
-  // extension host that's Electron, not a usable Node CLI for a spawned
-  // script. This assumes a real Node (>=22.5, for node:sqlite) is on PATH.
-  const runner = new RunnerClient("node", serverScript, dbPath, out);
-  context.subscriptions.push({ dispose: () => runner.dispose() });
+  out.appendLine(`DB: ${dbPath}`);
 
   let panel: vscode.WebviewPanel | undefined;
 
@@ -156,9 +152,20 @@ export function activate(context: vscode.ExtensionContext) {
     panel.webview.html = renderDashboardHtml(panel.webview, mediaRoot, bootstrap);
   }
 
-  runner.onUpdate(() => {
-    renderPanel().catch((err) => out.appendLine(`render failed: ${err?.message ?? err}`));
-  });
+  // Deliberately "node" from PATH, not process.execPath — inside the
+  // extension host that's Electron, not a usable Node CLI for a spawned
+  // script. This assumes a real Node (>=22.5, for node:sqlite) is on PATH.
+  // Reassignable so restartRunner/resetAllData can swap in a fresh one
+  // without reloading the whole window.
+  let runner = spawnRunner();
+
+  function spawnRunner(): RunnerClient {
+    const r = new RunnerClient("node", serverScript, dbPath, out);
+    r.onUpdate(() => {
+      renderPanel().catch((err) => out.appendLine(`render failed: ${err?.message ?? err}`));
+    });
+    return r;
+  }
 
   async function maybeOnboard() {
     await runner.ready;
@@ -271,12 +278,45 @@ export function activate(context: vscode.ExtensionContext) {
     await renderPanel();
   });
 
-  const restartRunner = vscode.commands.registerCommand("multiRepoAgentControlCenter.restartRunner", () => {
-    out.appendLine("restart requested \u2014 reload the window to pick it up (the daemon is spawned once, on activate).");
-    vscode.window.showInformationMessage("Reload the window to restart the Agent Control Center runner.");
+  async function restart() {
+    out.appendLine("restarting runner \u2014 killing current daemon and spawning a fresh one");
+    runner.dispose();
+    runner = spawnRunner();
+    await renderPanel();
+  }
+
+  const restartRunner = vscode.commands.registerCommand("multiRepoAgentControlCenter.restartRunner", async () => {
+    await restart();
+    vscode.window.showInformationMessage("Agent Control Center runner restarted.");
   });
 
-  context.subscriptions.push(openDashboard, restartRunner, out);
+  const resetAllData = vscode.commands.registerCommand("multiRepoAgentControlCenter.resetAllData", async () => {
+    // Deletes every tracked repo, dispatch, escalation, finding, log, and
+    // task \u2014 back to a genuinely empty state, same as a first install.
+    // Mainly for exactly the situation that prompted this command: a
+    // stale build having already seeded rows a fixed build won't remove
+    // on its own (removing the code that writes bad data doesn't undo
+    // data it already wrote).
+    const confirm = await vscode.window.showWarningMessage(
+      `Delete all tracked repos, dispatches, escalations, findings, and the plan? This cannot be undone.\n\n${dbPath}`,
+      { modal: true },
+      "Delete Everything"
+    );
+    if (confirm !== "Delete Everything") return;
+    runner.dispose();
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try {
+        fs.unlinkSync(dbPath + suffix);
+      } catch {
+        // fine if it didn't exist
+      }
+    }
+    runner = spawnRunner();
+    await renderPanel();
+    vscode.window.showInformationMessage("Agent Control Center data cleared.");
+  });
+
+  context.subscriptions.push(openDashboard, restartRunner, resetAllData, { dispose: () => runner.dispose() }, out);
 }
 
 function renderDashboardHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, bootstrap: unknown): string {
