@@ -135,6 +135,7 @@ export interface Snapshot {
   log: LogEntry[];
   requirementPhase: string | null;
   requirementTitle: string | null;
+  cruiseControl: boolean;
 }
 
 const SCHEMA = `
@@ -606,6 +607,7 @@ export class Db {
       log: this.listLogEntries(),
       requirementPhase: this.getMeta("requirement_phase"),
       requirementTitle: this.getMeta("requirement_title"),
+      cruiseControl: this.getMeta("cruise_control") === "on",
     };
   }
 

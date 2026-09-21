@@ -124,6 +124,28 @@ looking for the source of truth on what each gate requires). Single-slot by desi
 in flight at a time as tracked here, not a queue of many; starting a new one means explicitly
 resetting the phase back to `critique`, since it doesn't reset itself.
 
+**Cruise control — a dashboard toggle, unlike the phase.** A header button (`Cruise control:
+On/Off`, `meta` key `cruise_control`) flips a plain operational mode, not a judgment call, so
+unlike the phase stepper above it's deliberately a real click target — either the dashboard or the
+coordinator (`get_cruise_control`/`set_cruise_control`) can read or flip it, and both stay in sync
+off the same `meta` row. When on, every successful `dispatch` call's result carries an extra
+`cruiseControlNote` field telling the coordinator to check `get_tasks` and queue the next unblocked
+task itself, without waiting to be asked, until the plan is done or something needs a human.
+
+This is **not** a real background loop, and can't be: MCP is pull-only from the coordinator's
+side, confirmed (not just assumed) while building this — a server-initiated MCP notification
+reaches a client only while it's actively mid-turn or polling again later, never one sitting idle
+at a prompt or between turns, and nothing else in this stack (Claude Code hooks, scheduled cloud
+routines, push notifications) closes that gap either: hooks only react to the *current* session's
+own events, a cron-scheduled cloud routine can't reach a local stdio MCP server spawned via
+`.mcp.json` in the first place, and push notifications reach a human's phone, not a resumed model
+turn. So `cruiseControlNote` is really a repeated reminder embedded in every dispatch result — it
+only has an effect the next time the coordinator is *already* actively calling a tool, not a way to
+wake one that's gone idle or ended its turn. If a coordinator dispatches with cruise control on and
+then stops responding, nothing here will bring it back; the value is in not needing to remember to
+ask it to keep going every single time, not in genuine autonomy independent of the session staying
+active.
+
 **The header phase stepper is read-only.** It shows `requirementPhase` from the `meta` table
 (via `db.snapshot()` → `extension.ts`'s `toBootstrap()` → the webview bootstrap/postMessage
 payload) and has no click handlers at all — it predates `get_requirement_phase`/

@@ -159,6 +159,7 @@ function toBootstrap(snapshot: any) {
     log,
     requirementPhase: snapshot.requirementPhase || null,
     requirementTitle: snapshot.requirementTitle || null,
+    cruiseControl: !!snapshot.cruiseControl,
   };
 }
 
@@ -451,6 +452,9 @@ export function activate(context: vscode.ExtensionContext) {
             break;
           case "togglePause":
             await runner.call("togglePause", { repoId: msg.repoId });
+            break;
+          case "setCruiseControl":
+            await runner.call("setCruiseControl", { on: msg.on });
             break;
           case "stopAgent":
             await runner.call("stopAgent", { repoId: msg.repoId });

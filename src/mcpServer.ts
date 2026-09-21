@@ -194,14 +194,23 @@ ${METHODOLOGY_TEXT}
 ---
 
 Nothing pushes a dispatch's result back to you when it lands — there is
-no notification reaching a coordinator session today, MCP's own
-notification primitives or not (unverified whether they'd even reach
-you if used). If you dispatch and then end your turn, you will not
-hear about it finishing. Either wait and poll (get_repo_status for one
-repo, list_recent_activity for all of them at once) before ending your
-turn if the result actually matters to what happens next, or say
-explicitly that you're not waiting and how you intend to check back —
-don't let a dispatch quietly become fire-and-forget by accident.
+no notification reaching a coordinator session today. Confirmed, not
+just assumed: MCP's own server-initiated notification primitives don't
+reach a client that's idle at a prompt or has ended its turn, only one
+that's actively mid-turn or polls again later — this server has no way
+around that, and neither does anything else in this environment. If you
+dispatch and then end your turn, you will not hear about it finishing.
+Either wait and poll (get_repo_status for one repo, list_recent_activity
+for all of them at once) before ending your turn if the result actually
+matters to what happens next, or say explicitly that you're not waiting
+and how you intend to check back — don't let a dispatch quietly become
+fire-and-forget by accident. get_cruise_control/set_cruise_control (also
+a dashboard toggle) is the closest thing to automating that polling: on,
+every dispatch result carries a reminder to check get_tasks and queue
+the next unblocked task yourself — still not a real background loop,
+since it only has an effect the next time you're actively calling a
+tool anyway, but it keeps that reminder from depending on you
+remembering it every single time.
 
 Typical loop: get_methodology once per session if you haven't already →
 get_requirement_phase to see where things actually stand → list_repos to
@@ -363,6 +372,23 @@ server.tool(
 );
 
 server.tool(
+  "get_cruise_control",
+  "Read whether cruise control is on. When on, every successful dispatch's result includes a reminder to keep driving the plan yourself (check get_tasks, dispatch the next unblocked task) instead of stopping after one step. This is a plain operational toggle — settable from the dashboard (a button in the header) or here, either side, unlike set_requirement_phase which is deliberately coordinator-only.",
+  {},
+  async () => text({ cruiseControl: db.getMeta("cruise_control") === "on" })
+);
+
+server.tool(
+  "set_cruise_control",
+  "Turn cruise control on or off. On: every dispatch result carries a reminder to keep going — check get_tasks yourself and queue the next unblocked task(s) without being asked, until the plan is done or something needs a human. This cannot make the control center itself wake you up later — MCP has no way to push a result back into an idle session, so the reminder only has an effect the next time you're actively calling dispatch anyway. Off is the default; turn it back off once you'd rather drive one step at a time yourself.",
+  { on: z.boolean() },
+  async ({ on }) => {
+    db.setMeta("cruise_control", on ? "on" : "off");
+    return text({ cruiseControl: on });
+  }
+);
+
+server.tool(
   "discover_github_repos",
   "Resync the tracked repo list against real GitHub state (via `gh`, not a token this tool manages itself) and check which ones have a local clone this machine can actually run against. Adds newly-found repos (including ones that exist on GitHub but aren't cloned locally yet — flagged via cwd: '', not hidden), updates cwd for ones that are now locally cloned, and never blanks a repo's existing cwd just because this pass didn't find it (it may have looked in the wrong place). Needs `gh` installed and network access; see discover_local_repos for a network-free alternative that only finds what's already checked out. This only tells you a repo EXISTS and is runnable — it does not know what a repo does; that's what summary (see list_repos) is for, and it only populates once a repo with a real cwd is started.",
   {
@@ -426,20 +452,37 @@ server.tool(
         error: `No requirement is in flight — call set_requirement_phase({phase:"critique"}) before dispatching real work to ${repo.repo}. Nothing was queued. See get_methodology for why.`,
       });
     }
+    // Cruise control (dashboard toggle, or set_cruise_control): when on,
+    // every successful dispatch reminds the coordinator to keep driving
+    // the plan itself rather than stopping after one step — this is the
+    // ONLY mechanism available for that. MCP is pull-only from the
+    // coordinator's side; there is no way for this server to wake an idle
+    // session or push it a later result, so "check periodically" can only
+    // ever mean "the coordinator, prompted here, chooses to check again
+    // soon during its own active turn" — a repeated nudge on every
+    // dispatch result, not a real background loop. See README.md's
+    // "Cruise control" section for the full reasoning.
+    const cruiseControlNote =
+      db.getMeta("cruise_control") === "on"
+        ? "Cruise control is ON: after this lands, call get_tasks yourself and dispatch() the next unblocked task(s) for this requirement (every dep already 'done', this task still 'todo') without waiting to be asked. Keep checking back (list_recent_activity or get_repo_status) rather than ending your turn, until every task is 'done' or something needs you — an open escalation, a finding logged with by:'wait', or a gate refusal from set_requirement_phase/upsert_task."
+        : undefined;
     if (repo.agent_status === "needsHuman") {
       const esc = db.openEscalationForRepo(repoId);
       return text({
         error: `${repo.repo} is blocked on a live escalation (kind: ${esc?.kind ?? "unknown"}) — this dispatch has been queued, but it will NOT run until that's resolved. Call resolve_escalation on escalation ${esc?.id ?? "?"} first.`,
         queued: db.queueDispatch(repoId, body),
+        ...(cruiseControlNote ? { cruiseControlNote } : {}),
       });
     }
     if (repo.agent_status === "stopped") {
       return text({
         error: `${repo.repo} is stopped — this dispatch has been queued, but nothing will pick it up until its agent is started. Call start_agent on ${repoId} to actually run it.`,
         queued: db.queueDispatch(repoId, body),
+        ...(cruiseControlNote ? { cruiseControlNote } : {}),
       });
     }
-    return text(db.queueDispatch(repoId, body));
+    const queued = db.queueDispatch(repoId, body);
+    return text(cruiseControlNote ? { ...queued, cruiseControlNote } : queued);
   }
 );
 

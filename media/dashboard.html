@@ -115,7 +115,10 @@ button { font: inherit; }
 
     <div style="display: flex; align-items: baseline; justify-content: space-between;">
       <div style="font-size: 14px; font-weight: 600; color: #ffffff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">Agent Control Center</div>
-      <div style="font-size: 11.5px; color: #8b8b8b;">{{ repoCountLabel }}</div>
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <button type="button" aria-pressed="{{ cruiseControl }}" style="{{ cruiseControlBtnStyle }}" onClick="{{ toggleCruiseControl }}"><span style="{{ cruiseControlDotStyle }}"></span>Cruise control: {{ cruiseControlLabel }}</button>
+        <div style="font-size: 11.5px; color: #8b8b8b;">{{ repoCountLabel }}</div>
+      </div>
     </div>
 
     <div style="display: flex; align-items: center; gap: 4px;">
@@ -521,6 +524,7 @@ class Component extends DCLogic {
     this.state = {
       tab: 'repos',
       requirementPhase: __bootstrap ? __bootstrap.requirementPhase : null,
+      cruiseControl: __bootstrap ? !!__bootstrap.cruiseControl : false,
       planView: 'list',
       showLinks: true,
       answering: null,
@@ -563,7 +567,8 @@ class Component extends DCLogic {
       items: data.items || [],
       taskDefs: data.tasks || [],
       log: data.log || [],
-      requirementPhase: data.requirementPhase || null
+      requirementPhase: data.requirementPhase || null,
+      cruiseControl: !!data.cruiseControl
     });
   }
 
@@ -581,6 +586,14 @@ class Component extends DCLogic {
     var phase = this.state.requirementPhase || null;
     var planView = this.state.planView || 'list';
     var showLinks = this.state.showLinks !== false;
+    // Unlike requirementPhase above, this one IS a plain UI toggle — an
+    // operational on/off switch, not a judgment call about whether a gate
+    // is actually satisfied, so a dashboard click is the right way to set
+    // it (mirrored to the coordinator via get_cruise_control/
+    // set_cruise_control in mcpServer.ts too, for symmetry — either side
+    // can flip it). Optimistic local update on click; the next daemon
+    // snapshot reconciles it same as every other toggle here.
+    var cruiseControl = this.state.cruiseControl === true;
 
     var phaseDefs = [
       { id: 'critique', label: 'Critique' },
@@ -1081,6 +1094,18 @@ class Component extends DCLogic {
           : 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;'),
       linksDotStyle: 'width: 7px; height: 7px; border-radius: 50%; '
         + (showLinks ? 'background: #4daafc;' : 'border: 1px solid #6e6e6e;'),
+      cruiseControl: cruiseControl,
+      cruiseControlLabel: cruiseControl ? 'On' : 'Off',
+      toggleCruiseControl: function () {
+        notifyHost({ type: 'setCruiseControl', on: !cruiseControl });
+        self.setState({ cruiseControl: !cruiseControl });
+      },
+      cruiseControlBtnStyle: 'display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 4px; font-size: 11.5px; cursor: pointer; '
+        + (cruiseControl
+          ? 'border: 1px solid #2f4a2f; background: #1c2a1c; color: #cccccc;'
+          : 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;'),
+      cruiseControlDotStyle: 'width: 7px; height: 7px; border-radius: 50%; '
+        + (cruiseControl ? 'background: #89d185;' : 'border: 1px solid #6e6e6e;'),
       repoRows: repoRows,
       repoCountLabel: repos.length === 0 ? 'no repos tracked' : (repos.length === 1 ? '1 repo tracked' : repos.length + ' repos tracked'),
       closeDrawer: function () { self.setState({ drawerFor: null, drawerMode: '' }); },

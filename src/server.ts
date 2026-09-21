@@ -165,6 +165,9 @@ function handle(req: Req): unknown {
       db.setRepoPaused(req.repoId, !repo.paused);
       return { ok: true };
     }
+    case "setCruiseControl":
+      db.setMeta("cruise_control", req.on ? "on" : "off");
+      return { ok: true };
     case "stopAgent":
       return stopAgent(db, req.repoId);
     case "startAgent":
