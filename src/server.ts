@@ -37,6 +37,42 @@ const db = new Db(dbPath);
 
 const busy = new Set<string>();
 
+// agent_status "running" is written once, at the start of runDispatch, and
+// only ever cleared at the end of that SAME async call once a response is
+// recorded (see agentRunner.ts). Nothing re-checks it against whether a
+// process is actually alive — there's no heartbeat. `busy` above is this
+// process's own bookkeeping of what IT is currently running, and it starts
+// empty on every launch, by construction. So on a fresh start, any repo
+// already showing "running" in the DB cannot be this process's doing — it's
+// left over from a PREVIOUS incarnation that died mid-dispatch (a crash, a
+// forced VS Code quit, the machine sleeping/losing power), not real,
+// in-progress work. Left alone, that's a green dot with no process behind
+// it, indefinitely — the dashboard's one always-trusted "something is
+// happening" signal, silently lying. Reconcile it before the poll loop
+// starts: the repo goes back to idle, and its one orphaned dispatch (by
+// construction, at most one can be state:'sent' with no response per repo —
+// dispatches run strictly one at a time) gets an explicit response saying
+// so, instead of sitting in "awaiting reply" forever with no way to tell it
+// was abandoned rather than just slow.
+for (const repo of db.listRepos()) {
+  if (repo.agent_status !== "running") continue;
+  const orphaned = db.listDispatches(repo.id).find((d) => d.state === "sent" && !d.response);
+  if (orphaned) {
+    db.setDispatchResponse(
+      orphaned.id,
+      "(interrupted — the control center's daemon process was restarted while this dispatch was running, " +
+        "before any result was recorded. Re-dispatch if this still needs doing.)"
+    );
+  }
+  db.setRepoStatus(repo.id, "idle");
+  db.appendLog(
+    repo.id,
+    "warn",
+    "daemon restarted while this repo showed running — reset to idle" +
+      (orphaned ? ` and marked its in-flight dispatch (${orphaned.id}) as interrupted` : "")
+  );
+}
+
 // ---- stdio protocol for the extension host ----
 
 type Req = { id: number; cmd: string; [k: string]: any };

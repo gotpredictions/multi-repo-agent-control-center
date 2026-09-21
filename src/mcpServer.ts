@@ -30,7 +30,86 @@ function parseArg(name: string, fallback: string): string {
 const dbPath = parseArg("--db", `${process.env.HOME}/.control-center/control-center.db`);
 const db = new Db(dbPath);
 
+// The project-level addendum a coordinator session wrote after actually
+// running this lifecycle once — kept as its own constant (not just inline
+// in SERVER_INSTRUCTIONS) so it can be served verbatim by get_methodology.
+// That matters because the MCP client hosting a coordinator session is free
+// to truncate a long `instructions` string before it ever reaches the
+// model — a tool call cannot be silently dropped the same way, so this is
+// the addendum's actual guarantee of reaching the coordinator, not the
+// embedded copy below.
+const METHODOLOGY_TEXT = `A requirement moves through five phases: Critique → Plan → Implement → Closing →
+Done. Each phase has a gate — a specific thing that must exist in the control
+center's own state before advancing — not just "nothing left in the dispatch
+queue." A phase indicator that advances on queue-empty/no-escalations alone is
+reporting a false signal; these gates exist to prevent that.
+
+As of this version, the phases below are no longer just guidance: set_requirement_phase,
+upsert_task, and dispatch enforce their own gates server-side and refuse the call
+with an explanatory error when a gate isn't met, rather than silently accepting a
+premature transition. The descriptions here explain *why* each gate exists; the
+tools themselves are what actually stop you.
+
+Critique — the requirement is researched and understood before any repo work
+starts. Record open questions and resolved ambiguities as add_finding against
+'coordinator' — not only in chat — so they survive across sessions. Use
+AskUserQuestion for anything only the requirement owner can decide (naming,
+stack choices, scope boundaries). Gate (enforced): set_requirement_phase refuses
+"plan" unless at least one add_finding has been logged for this requirement.
+
+Plan — the implementation plan, with cross-repo dependencies, is captured in
+the control center's task graph. Use upsert_task for every step, across every
+repo involved. Every task's task text must state its own test requirement
+alongside the work — e.g. "CRUD endpoints for todos — tests: pytest against
+real Postgres hitting all 4 routes", not just "CRUD endpoints." Encode
+cross-repo ordering via deps, not assumed sequencing. Gate (enforced):
+upsert_task itself refuses to write a non-milestone task whose text doesn't
+mention a test; set_requirement_phase refuses "implement" unless at least one
+task has been written for this requirement.
+
+Implement — code is implemented and individual steps are completed. Dispatch
+each step with full context (contract, constraints, what done looks like) —
+write it like a brief to a colleague who has no prior context. Mark a task
+done in upsert_task only after reading the actual dispatch response and the
+evidence it claims (test output, files, commits) — not on state: sent /
+queue-empty alone. If an agent's own verification stood in for real infra
+(e.g. SQLite instead of Postgres, mocks instead of a live API), that caveat
+must be carried forward explicitly (e.g. via add_finding), not dropped when
+the task flips to done — the server can check a status field, not whether the
+evidence behind it is real. Gate (enforced): set_requirement_phase refuses
+"closing" unless every task for this requirement has status "done".
+
+Closing — an end-to-end test exercises the combined system, not each repo's
+isolated suite. This step belongs to the coordinator (or a dedicated
+integration task), not any single repo's agent — no one repo can validate a
+cross-repo contract by itself. Advancing to Closing requires a passing
+combined-system run, with its output attached as an add_finding. If the
+environment cannot run it (missing infra, permissions, access), that blocker
+is itself an open finding — Closing is not satisfied, regardless of how idle
+the dispatch queues look. Gate (enforced): set_requirement_phase refuses
+"done" unless at least one add_finding has been logged since Closing began.
+
+Done — reachable only when (1) every task in Plan is done (server-checked
+before Closing was reachable), and (2) a finding logged during Closing
+documents the outcome (server-checked, though it cannot verify the finding's
+content describes an actually-passing run — that part is still on you).
+Gate (enforced): only reachable from "closing", one step at a time.
+
+Complementary practices (session-side, not control-center primitives) — these
+aren't control-center calls, but they feed the phases above and should run
+alongside them: Critique/Plan benefit from plan-mode-style research before
+touching any repo, but the output of that research must land in
+add_finding/upsert_task, or it's lost the moment the session ends. Implement
+should apply "trust but verify": an agent's summary of what it did is a
+claim, not evidence — read the actual diff/test output before marking a task
+done. None of the server-side gates above can verify THAT part — they check
+that a finding or a done-flag exists, not that you told the truth in it.`;
+
 const SERVER_INSTRUCTIONS = `Control center for coding-agent sessions running across multiple repos.
+
+Before your first dispatch or upsert_task in a session, call get_methodology —
+it returns the phase-by-phase gates verbatim, and survives even if this
+instructions string itself gets truncated before reaching you.
 Three channels exist here, and they are not interchangeable:
 
 - dispatch: proactive, your idea — a design adjustment, a clarification
@@ -79,12 +158,16 @@ first — is it actually sound, does it conflict with what a repo's
 summary says about its current state, is anything ambiguous enough to
 ask about (ask_human, or a finding if it's not blocking) — rather than
 dispatching straight to implementation and finding out the hard way.
-Once it holds up, write the plan as real tasks via upsert_task rather
-than only describing it in a dispatch or your own reply — a plan that
-only exists as prose is invisible to anyone else looking at the
-dashboard, and gets stale the moment reality diverges from what you
-said would happen. Update it with upsert_task as the plan itself
-changes, not just once at the start.
+This is enforced, not just advised: dispatch refuses to queue anything
+while no requirement is in flight (get_requirement_phase returns phase:
+null), so call set_requirement_phase({phase:'critique'}) before your
+first real dispatch of a session. Once it holds up, write the plan as
+real tasks via upsert_task rather than only describing it in a dispatch
+or your own reply — a plan that only exists as prose is invisible to
+anyone else looking at the dashboard, and gets stale the moment reality
+diverges from what you said would happen. upsert_task itself refuses a
+non-milestone task whose text doesn't state a test requirement. Update
+the plan with upsert_task as it changes, not just once at the start.
 
 Critique → plan → implement → closing → done is a requirement's own
 lifecycle, not a repo's — a single requirement often spans several
@@ -104,64 +187,10 @@ fresh start.
 The following is a project-level addendum a coordinator session wrote
 after actually running this lifecycle once, verbatim, because it
 reflects what the gates need to mean in practice better than a
-first-pass description would:
+first-pass description would (call get_methodology for this same text
+if it looks cut off below):
 
-A requirement moves through five phases: Critique → Plan → Implement → Closing →
-Done. Each phase has a gate — a specific thing that must exist in the control
-center's own state before advancing — not just "nothing left in the dispatch
-queue." A phase indicator that advances on queue-empty/no-escalations alone is
-reporting a false signal; these gates exist to prevent that.
-
-Critique — the requirement is researched and understood before any repo work
-starts. Record open questions and resolved ambiguities as add_finding against
-'coordinator' — not only in chat — so they survive across sessions. Use
-AskUserQuestion for anything only the requirement owner can decide (naming,
-stack choices, scope boundaries). Gate: do not advance to Plan while a
-material ambiguity is still unresolved.
-
-Plan — the implementation plan, with cross-repo dependencies, is captured in
-the control center's task graph. Use upsert_task for every step, across every
-repo involved. Every task's task text must state its own test requirement
-alongside the work — e.g. "CRUD endpoints for todos — tests: pytest against
-real Postgres hitting all 4 routes", not just "CRUD endpoints." A task with no
-stated test is an incomplete plan step. Encode cross-repo ordering via deps,
-not assumed sequencing. Gate: no task exists without a stated test
-requirement.
-
-Implement — code is implemented and individual steps are completed. Dispatch
-each step with full context (contract, constraints, what done looks like) —
-write it like a brief to a colleague who has no prior context. Mark a task
-done in upsert_task only after reading the actual dispatch response and the
-evidence it claims (test output, files, commits) — not on state: sent /
-queue-empty alone. If an agent's own verification stood in for real infra
-(e.g. SQLite instead of Postgres, mocks instead of a live API), that caveat
-must be carried forward explicitly, not dropped when the task flips to done.
-Gate: every task in Plan is done with evidence, not just dispatched.
-
-Closing — an end-to-end test exercises the combined system, not each repo's
-isolated suite. This step belongs to the coordinator (or a dedicated
-integration task), not any single repo's agent — no one repo can validate a
-cross-repo contract by itself. Advancing to Closing requires a passing
-combined-system run, with its output attached as an add_finding. If the
-environment cannot run it (missing infra, permissions, access), that blocker
-is itself an open finding — Closing is not satisfied, regardless of how idle
-the dispatch queues look. Gate: an add_finding exists documenting a passing
-end-to-end run.
-
-Done — reachable only when (1) every task in Plan is done with evidence, and
-(2) the Closing finding documents a passing combined-system run. If "Done" is
-being inferred any other way (e.g. a UI heuristic over queue and escalation
-state alone), treat that as a display bug, not a completion signal, and don't
-let it substitute for the two conditions above.
-
-Complementary practices (session-side, not control-center primitives) — these
-aren't control-center calls, but they feed the phases above and should run
-alongside them: Critique/Plan benefit from plan-mode-style research before
-touching any repo, but the output of that research must land in
-add_finding/upsert_task, or it's lost the moment the session ends. Implement
-should apply "trust but verify": an agent's summary of what it did is a
-claim, not evidence — read the actual diff/test output before marking a task
-done.
+${METHODOLOGY_TEXT}
 ---
 
 Nothing pushes a dispatch's result back to you when it lands — there is
@@ -174,13 +203,16 @@ turn if the result actually matters to what happens next, or say
 explicitly that you're not waiting and how you intend to check back —
 don't let a dispatch quietly become fire-and-forget by accident.
 
-Typical loop: get_requirement_phase to see where things actually stand →
-list_repos to see what's tracked and its status → dispatch to hand a
-repo new work → list_recent_activity or get_repo_status to see what's
-actually landed → list_open_escalations to see what's blocked and needs
-you → resolve_escalation to unblock it → set_requirement_phase once
-you've verified the next phase's gate is actually met. Repo ids are
-short slugs (list_repos shows them), not full repo names.`;
+Typical loop: get_methodology once per session if you haven't already →
+get_requirement_phase to see where things actually stand → list_repos to
+see what's tracked and its status → dispatch to hand a repo new work
+(refused if requirement_phase is null) → list_recent_activity or
+get_repo_status to see what's actually landed → list_open_escalations to
+see what's blocked and needs you → resolve_escalation to unblock it →
+set_requirement_phase once you believe the next phase's gate is met (the
+call itself re-verifies and refuses with the specific reason if it
+isn't). Repo ids are short slugs (list_repos shows them), not full repo
+names.`;
 
 const server = new McpServer(
   {
@@ -218,10 +250,18 @@ server.tool(
 );
 
 const REQUIREMENT_PHASES = ["critique", "plan", "implement", "closing", "done"] as const;
+const PHASE_ORDER: readonly string[] = REQUIREMENT_PHASES;
+
+server.tool(
+  "get_methodology",
+  "Return the full requirement lifecycle methodology verbatim — the critique/plan/implement/closing/done gates that set_requirement_phase, upsert_task, and dispatch enforce server-side. Call this before your first dispatch or upsert_task in a session (or any time a gate rejects a call and you want the full reasoning behind it, not just that call's short error). This exists as its own tool specifically because a long `instructions` string can be truncated by the client before it reaches you — a tool call can't be silently dropped the same way.",
+  {},
+  async () => text({ methodology: METHODOLOGY_TEXT })
+);
 
 server.tool(
   "get_requirement_phase",
-  "Read the current requirement's phase (critique/plan/implement/closing/done) and title, if set. This tracks ONE requirement at a time — not per-repo, not a queue of many. Returns phase: null if nothing has been set yet (e.g. a fresh control center, or between requirements). See the lifecycle addendum in these instructions for what actually gates each phase.",
+  "Read the current requirement's phase (critique/plan/implement/closing/done) and title, if set. This tracks ONE requirement at a time — not per-repo, not a queue of many. Returns phase: null if nothing has been set yet (e.g. a fresh control center, or between requirements) — dispatch will refuse to run until you call set_requirement_phase({phase:'critique'}). See get_methodology for what actually gates each phase transition.",
   {},
   async () =>
     text({
@@ -232,12 +272,90 @@ server.tool(
 
 server.tool(
   "set_requirement_phase",
-  "Set the current requirement's phase. This is the ONLY way it changes — there is no dashboard control for it, deliberately, so it never reflects a click instead of the coordinator's own judgment that a phase's gate is actually satisfied. Do not call this because the dispatch queue emptied out or escalations cleared; call it because you've verified the specific gate for the phase you're advancing to (see the lifecycle addendum in these instructions). Starting a new requirement after a previous one reached 'done'? Set this back to 'critique' explicitly — it does not reset itself.",
+  "Set the current requirement's phase. This is the ONLY way it changes — there is no dashboard control for it, deliberately, so it never reflects a click instead of the coordinator's own judgment that a phase's gate is actually satisfied. Phases advance one step at a time (critique → plan → implement → closing → done); each forward step is gated server-side (see get_methodology) and the call is REFUSED with an explanatory error, not silently accepted, if that phase's gate isn't met yet — do not call this because the dispatch queue emptied out or escalations cleared. Passing phase: 'critique' is always allowed and is how you start a new requirement (starting one after a previous one reached 'done'? set this back to 'critique' explicitly — it does not reset itself); doing so from any phase other than null/'critique' starts a fresh requirement scope, so findings/tasks logged for the previous requirement no longer count toward this one's gates.",
   {
     phase: z.enum(REQUIREMENT_PHASES),
     title: z.string().optional().describe("Short label for what requirement this is, for anyone else reading the control center's state. Omit to leave the existing title unchanged."),
   },
   async ({ phase, title }) => {
+    const current = db.getMeta("requirement_phase");
+
+    // Resetting to 'critique' is the one always-allowed move — it's the
+    // explicit "starting a new requirement" escape hatch the methodology
+    // calls for, and also the only legal first move from a fresh DB
+    // (current === null). Re-affirming 'critique' while already there
+    // (e.g. just to update the title) does NOT bump the requirement scope —
+    // only an actual transition INTO critique from somewhere else does.
+    if (phase === "critique") {
+      if (current && current !== "critique") db.bumpRequirementId();
+      db.setMeta("requirement_phase", "critique");
+      if (title) db.setMeta("requirement_title", title);
+      return text({ phase: "critique", title: db.getMeta("requirement_title"), requirementId: db.currentRequirementId() });
+    }
+
+    if (!current) {
+      return text({
+        error: `No requirement is in flight — call set_requirement_phase({phase:"critique"}) first. Jumping straight to "${phase}" is exactly the false signal these gates exist to prevent; see get_methodology.`,
+      });
+    }
+
+    if (phase === current) {
+      if (title) db.setMeta("requirement_title", title);
+      return text({ phase: current, title: db.getMeta("requirement_title") });
+    }
+
+    const curIdx = PHASE_ORDER.indexOf(current);
+    const targetIdx = PHASE_ORDER.indexOf(phase);
+    if (targetIdx !== curIdx + 1) {
+      return text({
+        error: `Cannot go from "${current}" to "${phase}" — phases advance one step at a time (${PHASE_ORDER.join(" → ")}). Call get_methodology if it's unclear why.`,
+      });
+    }
+
+    const reqId = db.currentRequirementId();
+
+    if (phase === "plan") {
+      const findingCount = db.countFindingsForRequirement(reqId);
+      if (findingCount < 1) {
+        return text({
+          error: `Critique gate not met: no add_finding has been logged yet for this requirement. Record the open questions/ambiguities you resolved (repoId 'coordinator' works for cross-cutting ones) before advancing to Plan — see get_methodology.`,
+        });
+      }
+    }
+
+    if (phase === "implement") {
+      const taskCount = db.tasksForRequirement(reqId).length;
+      if (taskCount < 1) {
+        return text({
+          error: `Plan gate not met: no tasks exist yet for this requirement. Use upsert_task for every step across every repo involved before advancing to Implement — see get_methodology.`,
+        });
+      }
+    }
+
+    if (phase === "closing") {
+      const tasks = db.tasksForRequirement(reqId);
+      const notDone = tasks.filter((t) => t.status !== "done");
+      if (tasks.length < 1 || notDone.length > 0) {
+        return text({
+          error: `Implement gate not met: ${notDone.length} of ${tasks.length} task(s) for this requirement are not "done" — ${
+            notDone.map((t) => t.id).join(", ") || "(none yet)"
+          }. Mark a task done only after reading real evidence for it (test output, files, commits), not on state:sent alone — see get_methodology.`,
+        });
+      }
+    }
+
+    if (phase === "done") {
+      const since = db.getMeta("closing_entered_at") ?? "";
+      const closingFindings = db.countFindingsForRequirement(reqId, since);
+      if (closingFindings < 1) {
+        return text({
+          error: `Closing gate not met: no add_finding has been logged since Closing began. Attach the passing combined end-to-end run's output as an add_finding first — see get_methodology.`,
+        });
+      }
+    }
+
+    if (phase === "closing") db.markClosingEntered();
+
     db.setMeta("requirement_phase", phase);
     if (title) db.setMeta("requirement_title", title);
     return text({ phase: db.getMeta("requirement_phase"), title: db.getMeta("requirement_title") });
@@ -295,7 +413,7 @@ server.tool(
 
 server.tool(
   "dispatch",
-  "Send a proactive message to a repo's agent — a design adjustment, a clarification request, a new task. This is NOT for answering a live permission escalation (use resolve_escalation for that) and is NOT itself a live interrupt: it's queued and the repo's agent picks it up when free. Write it the way you'd brief a person: context, the task, constraints, what done looks like. This call returns as soon as the dispatch is QUEUED, not when it's done — the real work can take minutes. Nothing pushes the result back to you; check for it yourself later via get_repo_status(repoId) (its dispatches array, state: 'sent' with a non-empty response) or list_recent_activity (across every repo at once, 'responded' entries).",
+  "Send a proactive message to a repo's agent — a design adjustment, a clarification request, a new task. This is NOT for answering a live permission escalation (use resolve_escalation for that) and is NOT itself a live interrupt: it's queued and the repo's agent picks it up when free. Write it the way you'd brief a person: context, the task, constraints, what done looks like. This call returns as soon as the dispatch is QUEUED, not when it's done — the real work can take minutes. Nothing pushes the result back to you; check for it yourself later via get_repo_status(repoId) (its dispatches array, state: 'sent' with a non-empty response) or list_recent_activity (across every repo at once, 'responded' entries). REFUSED (nothing queued) while no requirement is in flight — call set_requirement_phase({phase:'critique'}) first; this is the enforced form of 'critique the requirement before dispatching real implementation work' from get_methodology.",
   {
     repoId: z.string().describe("The repo's short id — see list_repos."),
     text: z.string().describe("The full dispatch prompt."),
@@ -303,6 +421,11 @@ server.tool(
   async ({ repoId, text: body }) => {
     const repo = db.getRepo(repoId);
     if (!repo) return text({ error: `no such repo: ${repoId}` });
+    if (!db.getMeta("requirement_phase")) {
+      return text({
+        error: `No requirement is in flight — call set_requirement_phase({phase:"critique"}) before dispatching real work to ${repo.repo}. Nothing was queued. See get_methodology for why.`,
+      });
+    }
     if (repo.agent_status === "needsHuman") {
       const esc = db.openEscalationForRepo(repoId);
       return text({
@@ -458,11 +581,11 @@ server.tool(
 
 server.tool(
   "upsert_task",
-  "Create or update one task on the implementation plan (the gantt). Reusing an existing id updates that task in place rather than creating a duplicate — this is how a plan gets kept current as work actually progresses, not just written once and left stale. See get_tasks for the current scale/ids before adding dependents.",
+  "Create or update one task on the implementation plan (the gantt). Reusing an existing id updates that task in place rather than creating a duplicate — this is how a plan gets kept current as work actually progresses, not just written once and left stale. See get_tasks for the current scale/ids before adding dependents. ENFORCED: a non-milestone task's `task` text must itself state a test requirement (e.g. \"CRUD endpoints for todos — tests: pytest against real Postgres hitting all 4 routes\") — a task whose text doesn't mention a test is refused outright, not written with a warning. Pass milestone: true for a checkpoint with no work/test of its own. Also refused while no requirement is in flight (see get_methodology) — call set_requirement_phase({phase:'critique'}) first.",
   {
     id: z.string().describe("Stable id for this task. Reuse it on later calls to update rather than duplicate."),
     repo: z.string().describe("Repo name shown on the gantt (a display label, not checked against tracked repos)."),
-    task: z.string().describe("Short description shown on the gantt bar."),
+    task: z.string().describe("Short description shown on the gantt bar. Must state its own test requirement (e.g. '... — tests: ...') unless milestone is true — see this tool's own description."),
     startH: z.number().describe("Start offset in hours from the plan's own zero point — not a calendar date. Check existing tasks (get_tasks) for the current scale before picking one."),
     durH: z.number().describe("Duration in hours. Use 0 for a milestone."),
     status: z.enum(["todo", "active", "blocking", "done"]).optional().describe("Defaults to 'todo'."),
@@ -470,6 +593,16 @@ server.tool(
     milestone: z.boolean().optional(),
   },
   async ({ id, repo, task, startH, durH, status, deps, milestone }) => {
+    if (!db.getMeta("requirement_phase")) {
+      return text({
+        error: `No requirement is in flight — call set_requirement_phase({phase:"critique"}) before planning tasks. Nothing was written.`,
+      });
+    }
+    if (!milestone && !/test/i.test(task)) {
+      return text({
+        error: `Plan gate: "${task}" doesn't state a test requirement. Every non-milestone task's text must state its own test alongside the work (e.g. "... — tests: pytest against real Postgres hitting all 4 routes"), not just describe the work — see get_methodology. Add one and retry, or pass milestone: true if this is a checkpoint with no work of its own. Nothing was written.`,
+      });
+    }
     db.upsertTask({
       id,
       repo,

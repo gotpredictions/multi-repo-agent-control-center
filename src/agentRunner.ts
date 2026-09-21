@@ -23,6 +23,7 @@ import { Db, Repo, Dispatch, EscalationOption, EscalationKind } from "./db";
 import { z } from "zod";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as os from "node:os";
 
 type CanUseToolResult =
   | { behavior: "allow"; updatedInput: Record<string, unknown> }
@@ -66,6 +67,26 @@ function isWithinCwd(filePath: unknown, cwd: string): boolean {
   const realInputAncestor = realpathClosestExisting(resolvedInput);
   const root = realCwd + path.sep;
   return realInputAncestor === realCwd || realInputAncestor.startsWith(root);
+}
+
+// System scratch space is already effectively unrestricted for these agents:
+// Bash is auto-approved below whenever it doesn't match the danger patterns,
+// and a plain `cat > /tmp/x` or `echo ... > /tmp/x` sails through that gate
+// today — a repo-scoped Write/Edit to the exact same path was the one path
+// that still escalated, purely because Write/Edit went through isWithinCwd
+// and Bash didn't go through it at all. That's an inconsistency, not an
+// extra safety layer: a scratch file in the OS temp dir can't touch this
+// machine's other repos or anything outside it either way, so gate it the
+// same way Bash already effectively is. os.tmpdir() (not a hardcoded /tmp)
+// so this also covers macOS's real default (/var/folders/.../T/...), which
+// Node's own tmp helpers resolve to instead of /tmp on most systems.
+const TMP_ROOTS = [os.tmpdir(), "/tmp"].map((p) => realpathClosestExisting(path.resolve(p)));
+
+function isWithinTmp(filePath: unknown): boolean {
+  if (typeof filePath !== "string" || !filePath) return false;
+  const resolvedInput = path.resolve(filePath);
+  const realInputAncestor = realpathClosestExisting(resolvedInput);
+  return TMP_ROOTS.some((root) => realInputAncestor === root || realInputAncestor.startsWith(root + path.sep));
 }
 
 // Denies (well, escalates) obviously catastrophic patterns rather than
@@ -164,7 +185,10 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
       if (toolName.startsWith("mcp__control-center__")) {
         return { behavior: "allow", updatedInput: input };
       }
-      if ((toolName === "Write" || toolName === "Edit") && isWithinCwd(input.file_path, repo.cwd)) {
+      if (
+        (toolName === "Write" || toolName === "Edit") &&
+        (isWithinCwd(input.file_path, repo.cwd) || isWithinTmp(input.file_path))
+      ) {
         return { behavior: "allow", updatedInput: input };
       }
       if (toolName === "Bash" && !looksDangerous(input.command)) {

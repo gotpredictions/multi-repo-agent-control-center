@@ -95,6 +95,12 @@ export interface Finding {
   sev: FindingSev;
   answer: string;
   created_at: string;
+  // Which requirement (see currentRequirementId()) this was logged under —
+  // stamped automatically, never caller-supplied. This is what lets the
+  // phase gates tell "a finding was logged for THIS requirement" apart from
+  // "a finding exists somewhere in the DB's history", which old requirements
+  // would otherwise satisfy for free.
+  requirement_id: number;
 }
 
 export interface LogLine {
@@ -114,6 +120,11 @@ export interface Task {
   status: "done" | "active" | "blocking" | "todo";
   deps: string[];
   milestone: 0 | 1;
+  // Stamped on first insert from currentRequirementId(), preserved across
+  // later upserts (a task keeps belonging to the requirement that created
+  // it, even if the plan is still being amended). Optional on the input
+  // shape passed to upsertTask() — callers never set this themselves.
+  requirement_id?: number;
 }
 
 export interface Snapshot {
@@ -245,6 +256,14 @@ export class Db {
     ensureColumn("dispatches", "responded_at", "TEXT NOT NULL DEFAULT ''");
     ensureColumn("escalations", "kind", "TEXT NOT NULL DEFAULT 'permission'");
     ensureColumn("repos", "summary", "TEXT NOT NULL DEFAULT ''");
+    // Requirement-lifecycle scoping (see currentRequirementId()): every
+    // finding/task belongs to whichever requirement was current when it was
+    // written. Pre-existing rows from before this column existed default to
+    // requirement 1, which matches currentRequirementId()'s own default —
+    // so a DB written by an older server version keeps working exactly as
+    // if requirement 1 had been explicit all along.
+    ensureColumn("findings", "requirement_id", "INTEGER NOT NULL DEFAULT 1");
+    ensureColumn("tasks", "requirement_id", "INTEGER NOT NULL DEFAULT 1");
   }
 
   onChange(cb: () => void) {
@@ -432,12 +451,13 @@ export class Db {
     disposition: string
   ): Finding {
     const id = `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const requirementId = this.currentRequirementId();
     this.conn
       .prepare(
-        `INSERT INTO findings (id, repo_id, text, phase, disposition, by, sev, answer, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)`
+        `INSERT INTO findings (id, repo_id, text, phase, disposition, by, sev, answer, created_at, requirement_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)`
       )
-      .run(id, repoId, text, phase, disposition, by, sev, clock());
+      .run(id, repoId, text, phase, disposition, by, sev, clock(), requirementId);
     this.changed();
     return this.getFinding(id)!;
   }
@@ -483,20 +503,34 @@ export class Db {
   // ---- tasks (the gantt — regenerated from these rows, never hand-edited) ----
 
   upsertTask(t: Task) {
+    // requirement_id is deliberately NOT in the ON CONFLICT...UPDATE clause:
+    // a task keeps belonging to whichever requirement first created it, even
+    // as later upserts amend its status/deps — only the initial INSERT arm
+    // stamps it, from the requirement that's current *right now*.
     this.conn
       .prepare(
-        `INSERT INTO tasks (id, repo, task, start_h, dur_h, status, deps_json, milestone)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO tasks (id, repo, task, start_h, dur_h, status, deps_json, milestone, requirement_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET repo=excluded.repo, task=excluded.task,
            start_h=excluded.start_h, dur_h=excluded.dur_h, status=excluded.status,
            deps_json=excluded.deps_json, milestone=excluded.milestone`
       )
-      .run(t.id, t.repo, t.task, t.start_h, t.dur_h, t.status, JSON.stringify(t.deps), t.milestone);
+      .run(t.id, t.repo, t.task, t.start_h, t.dur_h, t.status, JSON.stringify(t.deps), t.milestone, this.currentRequirementId());
     this.changed();
   }
 
   listTasks(): Task[] {
     const rows = this.conn.prepare(`SELECT * FROM tasks ORDER BY start_h, rowid`).all() as any[];
+    return rows.map((r) => ({ ...r, deps: JSON.parse(r.deps_json) }));
+  }
+
+  // Only this requirement's own tasks — used by the phase gates so a new
+  // requirement can't coast to "implement"/"closing" on a previous
+  // requirement's already-done task graph.
+  tasksForRequirement(requirementId: number): Task[] {
+    const rows = this.conn
+      .prepare(`SELECT * FROM tasks WHERE requirement_id = ? ORDER BY start_h, rowid`)
+      .all(requirementId) as any[];
     return rows.map((r) => ({ ...r, deps: JSON.parse(r.deps_json) }));
   }
 
@@ -571,6 +605,48 @@ export class Db {
     this.conn
       .prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
       .run(key, value);
+  }
+
+  // ---- requirement lifecycle scoping ----
+  //
+  // set_requirement_phase's gates need to tell "evidence logged for THIS
+  // requirement" apart from "evidence exists somewhere in the DB's history"
+  // — otherwise a brand-new requirement coasts through every gate for free
+  // on a previous, unrelated requirement's leftover findings/tasks. This id
+  // is the scoping key that fixes that; it is bumped only when explicitly
+  // starting a fresh requirement (see set_requirement_phase in mcpServer.ts),
+  // never on every critique-phase re-entry.
+
+  currentRequirementId(): number {
+    const v = this.getMeta("requirement_id");
+    if (v) return parseInt(v, 10);
+    this.setMeta("requirement_id", "1");
+    return 1;
+  }
+
+  bumpRequirementId(): number {
+    const next = this.currentRequirementId() + 1;
+    this.setMeta("requirement_id", String(next));
+    return next;
+  }
+
+  // Marks "now" as the moment this requirement entered Closing — the Done
+  // gate requires a finding logged at or after this point (the passing
+  // combined end-to-end run), not just any finding from earlier in the
+  // requirement's life.
+  markClosingEntered() {
+    this.setMeta("closing_entered_at", clock());
+  }
+
+  countFindingsForRequirement(requirementId: number, sinceClock?: string): number {
+    const row = sinceClock
+      ? (this.conn
+          .prepare(`SELECT COUNT(*) AS n FROM findings WHERE requirement_id = ? AND created_at >= ?`)
+          .get(requirementId, sinceClock) as { n: number })
+      : (this.conn.prepare(`SELECT COUNT(*) AS n FROM findings WHERE requirement_id = ?`).get(requirementId) as {
+          n: number;
+        });
+    return row.n;
   }
 
   // Repos are keyed by a short id, but discovery only knows the real repo

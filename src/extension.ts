@@ -78,6 +78,36 @@ class RunnerClient {
 // notifyNewEscalations/tailLogsToOutputChannels), so the webview no longer
 // needs that data at all. The red status dot still reflects agent_status,
 // which is included.
+// Confirmed via live bisection, not guesswork: embedding this session's full
+// dispatch history (~18 dispatches, one repo's alone ~20K chars) in the
+// initial webview payload reliably crashed the dashboard on load — verified
+// by removing repos' dispatches one at a time and watching it start working
+// again once the total dropped low enough, then re-adding them one at a
+// time until it broke again. No content anomaly was found in the data that
+// broke it (checked for the classic script-tag-breaking Unicode gotchas,
+// stray <script> sequences, control characters — none present); it's
+// genuinely about total payload size, most plausibly at the VS Code/
+// Electron webview-host level (a large inline <script> blob taking long
+// enough to load that a second render pass — see syncFromDaemon's own
+// synchronous-claim fix — could still land badly), not a bug in this
+// codebase's own JS logic, which is why the code-level fixes made getting
+// to this diagnosis didn't resolve it on their own.
+//
+// This caps individual text fields rather than the total payload or
+// dispatch count — simpler, and sufficient for what's actually been
+// observed to trigger this. It does NOT cap unbounded growth from an
+// ever-increasing NUMBER of dispatches/findings/log lines over a very
+// long-running session; if that recurs, the real fix is windowing (embed
+// only the N most recent in full) with on-demand fetch for older ones, not
+// a bigger per-item cap.
+const MAX_EMBED_TEXT_CHARS = 4000;
+function truncateForEmbed(s: string | null | undefined): string {
+  if (!s) return s ?? "";
+  if (s.length <= MAX_EMBED_TEXT_CHARS) return s;
+  const omitted = s.length - MAX_EMBED_TEXT_CHARS;
+  return s.slice(0, MAX_EMBED_TEXT_CHARS) + `\n\n[… ${omitted} more characters omitted to keep the dashboard payload a safe size]`;
+}
+
 function toBootstrap(snapshot: any) {
   const repos = snapshot.repos.map((r: any) => ({
     id: r.id,
@@ -88,10 +118,10 @@ function toBootstrap(snapshot: any) {
     paused: !!r.paused,
     dispatches: r.dispatches.map((d: any) => ({
       id: d.id,
-      text: d.text,
+      text: truncateForEmbed(d.text),
       state: d.state,
       at: d.at,
-      response: d.response,
+      response: truncateForEmbed(d.response),
     })),
   }));
 
@@ -101,7 +131,7 @@ function toBootstrap(snapshot: any) {
   const items = snapshot.findings.map((f: any) => ({
     id: f.id,
     repo: repoNameById[f.repo_id] || f.repo_id,
-    text: f.text,
+    text: truncateForEmbed(f.text),
     phase: f.phase,
     disposition: f.disposition,
     by: f.by,
@@ -120,7 +150,7 @@ function toBootstrap(snapshot: any) {
     milestone: !!t.milestone,
   }));
 
-  const log = (snapshot.log || []).map((e: any) => ({ when: e.when, repo: e.repo, text: e.text }));
+  const log = (snapshot.log || []).map((e: any) => ({ when: e.when, repo: e.repo, text: truncateForEmbed(e.text) }));
 
   return {
     repos,
@@ -284,15 +314,37 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   async function syncFromDaemon() {
+    // Claiming "I'm the first render" has to happen synchronously, before
+    // the first await below — not after, which is where it lived until a
+    // real, confirmed bug: r.onUpdate fires on every db.onChange, which
+    // happens very often (each dispatch's tool-call log line is its own
+    // write), so two overlapping syncFromDaemon() calls were a real
+    // occurrence, not a hypothetical. Both would reach `await
+    // runner.call("snapshot")`, and whichever's response happened to land
+    // second would still see panelInitialized === false — the flag hadn't
+    // been set yet, because the call that should have set it was itself
+    // still awaiting. Both then set panel.webview.html, and with
+    // retainContextWhenHidden the webview didn't cleanly replace on the
+    // second assignment — it ended up with two full copies of every
+    // <script> tag (react.js, react-dom.js, support.js) loaded into the
+    // same document, confirmed directly via document.querySelectorAll
+    // ('script[src]') during live debugging. That's what was crashing the
+    // dashboard: two independent boot passes racing over the same shared
+    // runtime state. Checking and setting the flag in the same synchronous
+    // step, before any await, closes the window entirely — a second
+    // overlapping call now sees isFirstRender === false immediately, no
+    // race possible regardless of how the two calls interleave afterward.
+    const isFirstRender = !panelInitialized;
+    if (isFirstRender) panelInitialized = true;
     await runner.ready;
     const snapshot = await runner.call("snapshot");
     tailLogsToOutputChannels(snapshot);
     notifyNewEscalations(snapshot);
     if (!panel) return;
     const bootstrap = toBootstrap(snapshot);
-    if (!panelInitialized) {
+    if (isFirstRender) {
+      out.appendLine(`[extension] assigning panel.webview.html now, t=${Date.now()}`);
       panel.webview.html = renderDashboardHtml(panel.webview, mediaRoot, bootstrap);
-      panelInitialized = true;
     } else {
       panel.webview.postMessage({ type: "snapshot", data: bootstrap });
     }
@@ -418,6 +470,27 @@ export function activate(context: vscode.ExtensionContext) {
             if (repo?.escalation) await answerEscalation(msg.repoId, repo.escalation);
             break;
           }
+          case "clientError":
+          case "clientLog":
+            // Standing capability, not scaffolding to rip out later: the
+            // webview reports its own errors (window.onerror /
+            // unhandledrejection — the one thing that's supposed to fire
+            // even when the rest of the page crashed on load) and,
+            // opt-in, its own debug logs, over the same postMessage
+            // channel every other webview action already uses, straight
+            // into this extension's own Output channel. This exists
+            // because getting anything out of a webview's own devtools
+            // console turned out to be genuinely hard in practice — nested,
+            // cross-origin iframes that plain `document.scripts`
+            // inspection from the workbench console can't reach, and even
+            // the webview-specific devtools command didn't land in the
+            // expected context. An Output channel is a much smaller thing
+            // to reason about than "go find the right devtools frame," and
+            // fits how this whole extension is meant to work: read the
+            // Output panel, not reverse-engineer a nested iframe tree.
+            out.appendLine(`[webview ${msg.type === "clientError" ? "error" : "log"}] ${msg.detail}`);
+            if (msg.type === "clientError") out.show(true);
+            break;
           default:
             out.appendLine(`unknown webview message: ${JSON.stringify(msg)}`);
         }
@@ -573,11 +646,27 @@ function renderDashboardHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, boo
 
   const bootstrapScript = `<script>window.__CC_BOOTSTRAP__ = ${JSON.stringify(bootstrap).replace(/</g, "\\u003c")};</script>`;
 
+  // The root cause of a crash chased at length: String.prototype.replace()'s
+  // SECOND argument, even with a plain-string first argument (not a regex),
+  // still interprets special "$" patterns in the replacement text — $&, $`,
+  // $', $$, etc. bootstrapScript is built from real dispatch/finding text a
+  // repo agent wrote, which can legitimately contain any of these — e.g. a
+  // regex code snippet ending in `'$')` contains the literal two-character
+  // sequence $', which means "insert everything after the match" to
+  // replace(). That silently spliced this file's OWN </head><body>...
+  // markup into the middle of the JSON payload, corrupting it into invalid
+  // JS a few thousand characters later and crashing the dashboard on load
+  // with no indication why — confirmed by bisecting the live data down to
+  // the exact dispatch, then isolating it to this exact mechanism with a
+  // minimal repro. A function replacer's return value is inserted
+  // verbatim, with no special-pattern interpretation of any kind — use one
+  // for ANY replacement value that isn't a fixed literal, not just this one,
+  // since the next arbitrary text embedded here would hit the same trap.
   return raw
-    .replace("{{REACT_URI}}", uri("vendor/react.js"))
-    .replace("{{REACT_DOM_URI}}", uri("vendor/react-dom.js"))
-    .replace("{{SUPPORT_URI}}", uri("support.js"))
-    .replace("</head>", `${bootstrapScript}\n</head>`);
+    .replace("{{REACT_URI}}", () => uri("vendor/react.js"))
+    .replace("{{REACT_DOM_URI}}", () => uri("vendor/react-dom.js"))
+    .replace("{{SUPPORT_URI}}", () => uri("support.js"))
+    .replace("</head>", () => `${bootstrapScript}\n</head>`);
 }
 
 export function deactivate() {}

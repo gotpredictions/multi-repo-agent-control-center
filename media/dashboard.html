@@ -8,6 +8,81 @@
 <script src="{{SUPPORT_URI}}"></script>
 </head>
 <body>
+<script>
+// Defense in depth, independent of any specific root cause: if anything
+// throws uncaught before the app has a chance to render (this runtime's own
+// internals included — see the acquireVsCodeApi comment further down for
+// one confirmed cause, but this catches any future one too), the dashboard
+// used to go silently blank or show raw, unstyled backing data with no
+// indication anything was wrong. That's what actually prompted this: a real
+// user staring at a broken panel with no error, no obvious next step. This
+// runs before anything else and uses only vanilla DOM APIs — no React, no
+// dependency on the runtime that might be what's broken — so it still works
+// even when the thing that crashed is the rendering system itself. It only
+// ever adds a banner; it never removes or replaces existing content, so a
+// real (but harmless) error elsewhere won't hide a dashboard that otherwise
+// rendered fine.
+(function () {
+  var shown = false;
+  // Getting a real error out of this page's own devtools console turned out
+  // to be genuinely hard in practice — VS Code webviews are nested,
+  // cross-origin iframes, and reaching the right one to even run
+  // `document.scripts` took several rounds of guessing. So in addition to
+  // the visible banner, report full error details over the SAME
+  // postMessage channel every other action in this page already uses
+  // (dispatch, escalation answers, …) straight to the extension's own
+  // Output channel — no devtools navigation required to see it.
+  var vscodeApi = window.__ccVsCodeApi || (typeof acquireVsCodeApi === 'function'
+    ? (window.__ccVsCodeApi = acquireVsCodeApi())
+    : null);
+  // Standing debug channel, not scaffolding — the extension side
+  // (extension.ts's clientLog handler) always has its own Output channel
+  // for this, on purpose: a webview's own devtools console is genuinely
+  // hard to reach (nested, cross-origin iframes) compared to just reading
+  // an Output panel. Exposed on window so support.js's own instrumentation
+  // (hand-patched, see its file header) can call it too. Individual call
+  // sites using this (e.g. the Mt()/c() render-count instrumentation added
+  // while chasing the useState-null crash) can still be investigation-
+  // specific and removed once no longer useful — it's this plumbing itself
+  // that's meant to stay.
+  window.__ccLog = function (detail) {
+    try { if (vscodeApi) vscodeApi.postMessage({ type: 'clientLog', detail: String(detail) }); } catch (e) { /* best effort */ }
+  };
+  function reportHome(detail) {
+    if (!vscodeApi) return;
+    try { vscodeApi.postMessage({ type: 'clientError', detail: detail }); } catch (e) { /* best effort */ }
+  }
+  function showFallback(summary, detail) {
+    if (shown) return;
+    shown = true;
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#5a1d1d;color:#f8d7da;'
+      + 'font:12px system-ui,sans-serif;padding:10px 14px;border-bottom:1px solid #f14c4c;white-space:pre-wrap;';
+    el.textContent = 'Agent Control Center failed to load (' + summary + '). '
+      + 'Full details were sent to the "Agent Control Center" Output channel — '
+      + 'Cmd+Shift+P -> "View: Toggle Output" and pick it from the dropdown.';
+    document.body.insertBefore(el, document.body.firstChild);
+    reportHome(detail);
+  }
+  window.addEventListener('error', function (e) {
+    var loc = 'line ' + e.lineno + ', col ' + e.colno + ' of ' + (e.filename || location.href);
+    var around = '';
+    try {
+      var html = document.documentElement.outerHTML;
+      var c = typeof e.colno === 'number' ? e.colno : -1;
+      if (c > 0) around = '\ncontext: ' + JSON.stringify(html.slice(Math.max(0, c - 150), c + 150));
+    } catch (ignored) {}
+    var detail = (e.message || 'unknown error') + ' at ' + loc
+      + (e.error && e.error.stack ? '\nstack: ' + e.error.stack : '') + around;
+    showFallback(e.message || 'unknown error', detail);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var msg = (e.reason && (e.reason.message || String(e.reason))) || 'unhandled rejection';
+    var detail = msg + (e.reason && e.reason.stack ? '\nstack: ' + e.reason.stack : '');
+    showFallback(msg, detail);
+  });
+})();
+</script>
 <x-dc>
 <helmet>
 <style>
@@ -164,7 +239,7 @@ button { font: inherit; }
                       <div style="display: flex; align-items: center; gap: 8px;">
                         <button type="button" style="{{ saveBtnStyle }}" onClick="{{ row.newDispatch }}">+ New dispatch</button>
                         <button type="button" style="{{ row.pauseBtnStyle }}" onClick="{{ row.togglePause }}">{{ row.pauseLabel }}</button>
-                        <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ closeDrawer }}">Close</button>
+                        <button type="button" aria-label="Close" style="{{ cancelBtnStyle }}" onClick="{{ closeDrawer }}">×</button>
                       </div>
                     </div>
 
@@ -425,7 +500,17 @@ button { font: inherit; }
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":960,"height":640}}'>
 var __bootstrap = (typeof window !== 'undefined' && window.__CC_BOOTSTRAP__) || null;
-var __vscode = (typeof acquireVsCodeApi === 'function') ? acquireVsCodeApi() : null;
+// This whole <script type="text/x-dc"> block is inert to the browser (not a
+// real MIME type) — the dc-runtime eval's it itself, on purpose, more than
+// once: once to boot the app, and again whenever its own self-refresh path
+// re-parses the page. acquireVsCodeApi() throws on a second call within the
+// same webview session ("An instance of the VS Code API has already been
+// acquired"), which was aborting that second eval partway through and
+// leaving the runtime's component registration half-built — the actual
+// cause of the dashboard going blank/garbled with no visible error. Caching
+// the one real instance on window makes every eval past the first reuse it
+// instead of re-acquiring, so a re-eval no longer throws here.
+var __vscode = window.__ccVsCodeApi || (window.__ccVsCodeApi = (typeof acquireVsCodeApi === 'function') ? acquireVsCodeApi() : null);
 function notifyHost(msg) {
   if (__vscode) { try { __vscode.postMessage(msg); } catch (e) { /* not fatal — next daemon push reconciles */ } }
 }
@@ -775,6 +860,13 @@ class Component extends DCLogic {
 
     var repoRows = repos.map(function (r, i) {
       var queued = r.dispatches.filter(function (d) { return d.state === 'queued'; }).length;
+      // "queued" alone is a false-empty signal the moment the daemon picks a
+      // dispatch up: state flips to 'sent' right away, well before a
+      // response exists, so a row can show "0 queued" while real work is
+      // still in flight and nobody's looked at the result yet. Surface that
+      // state (same 'awaiting' definition the per-item drawer already uses
+      // below) at the row level too, since that's the glanceable view.
+      var awaitingReply = r.dispatches.filter(function (d) { return d.state === 'sent' && !d.response; }).length;
       var menuItems = [];
       if (r.agent === 'stopped') {
         menuItems.push({
@@ -859,11 +951,15 @@ class Component extends DCLogic {
         })(),
         menuItems: menuItems.map(function (m) { return { label: m.label, style: menuItemStyle, pick: m.pick }; }),
 
-        queueLabel: r.dispatches.length === 0
-          ? 'none'
-          : (queued + ' queued' + (r.paused ? ' · paused' : '')),
+        queueLabel: (function () {
+          if (r.dispatches.length === 0) return 'none';
+          var parts = [];
+          if (queued > 0) parts.push(queued + ' queued');
+          if (awaitingReply > 0) parts.push(awaitingReply + ' awaiting reply');
+          return (parts.length ? parts.join(', ') : 'all answered') + (r.paused ? ' · paused' : '');
+        })(),
         queueBtnStyle: smallGhost + 'border: 1px solid #3c3c3c; background: transparent; color: '
-          + (r.paused ? '#d7ba7d;' : (queued > 0 ? '#cccccc;' : '#8b8b8b;')),
+          + (r.paused ? '#d7ba7d;' : ((queued > 0 || awaitingReply > 0) ? '#cccccc;' : '#8b8b8b;')),
         openDispatches: function () { self.setState({ drawerFor: r.id, drawerMode: 'dispatches', menuFor: null }); },
         dispatchOpen: drawerFor === r.id && drawerMode === 'dispatches',
         pauseLabel: r.paused ? 'Resume queue' : 'Pause queue',
