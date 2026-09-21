@@ -141,7 +141,13 @@ export function activate(context: vscode.ExtensionContext) {
   const serverScript = path.join(context.extensionUri.fsPath, "out", "server.js");
   const mcpServerScript = path.join(context.extensionUri.fsPath, "out", "mcpServer.js");
   const dbPath = path.join(context.globalStorageUri.fsPath, "control-center.db");
-  const mcpRegisterCommand = `claude mcp add --scope project control-center -- node ${mcpServerScript}`;
+  // Without --db, the standalone MCP server process falls back to its own
+  // default (~/.control-center/control-center.db) — a completely
+  // different file from the one this extension's daemon actually watches
+  // (context.globalStorageUri). Every tool call would "succeed" while
+  // writing into a file the daemon never reads, so nothing dispatched
+  // through MCP would ever actually run. Must match dbPath exactly.
+  const mcpRegisterCommand = `claude mcp add --scope project control-center -- node ${mcpServerScript} --db "${dbPath}"`;
   out.appendLine(`DB: ${dbPath}`);
   out.appendLine(`To register the MCP server: ${mcpRegisterCommand}`);
 
@@ -391,7 +397,12 @@ export function activate(context: vscode.ExtensionContext) {
       }
       // Merges into whatever else is already there (other MCP servers
       // that project already configured) rather than clobbering the file.
-      existing.mcpServers["control-center"] = { command: "node", args: [mcpServerScript] };
+      // --db must match dbPath exactly (see mcpRegisterCommand's comment
+      // above) — without it the server defaults to its own
+      // ~/.control-center/control-center.db, a different file from the
+      // one this extension's daemon actually watches, and nothing
+      // dispatched through it would ever be picked up.
+      existing.mcpServers["control-center"] = { command: "node", args: [mcpServerScript, "--db", dbPath] };
       fs.writeFileSync(mcpJsonPath, JSON.stringify(existing, null, 2) + "\n");
 
       const doc = await vscode.workspace.openTextDocument(mcpJsonPath);

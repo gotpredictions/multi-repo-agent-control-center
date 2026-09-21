@@ -103,13 +103,15 @@ rooted there. No CLI invocation, no touching `~/.claude.json`.
 file in the repo:
 
 ```bash
-claude mcp add --scope project control-center -- node <this-install's-out>/mcpServer.js
+claude mcp add --scope project control-center -- node <this-install's-out>/mcpServer.js --db <this-install's-db-path>
 ```
 
 Run **"Agent Control Center: Copy MCP Registration Command"** to get the exact command for *this*
-install on your clipboard rather than typing the path by hand. `--scope project` registers it for
-sessions run from the current project only; use `--scope user` instead for every project on this
-machine.
+install on your clipboard rather than typing either path by hand. `--db` isn't optional here —
+without it the server falls back to its own default (`~/.control-center/control-center.db`), a
+different file from the one this install's daemon actually watches, and dispatches sent through it
+would succeed but never be picked up by anything. `--scope project` registers it for sessions run
+from the current project only; use `--scope user` instead for every project on this machine.
 
 Either way, verify with `claude mcp list` (should show `control-center — ✔ Connected`).
 Registering doesn't reach sessions already running — MCP servers load at session start, not

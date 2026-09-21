@@ -33,8 +33,8 @@ button { font: inherit; }
   <div style="box-sizing: border-box; padding: 18px 24px 0 24px; display: flex; flex-direction: column; gap: 16px; flex-grow: 1; min-height: 0;">
 
     <div style="display: flex; align-items: baseline; justify-content: space-between;">
-      <div style="font-size: 14px; font-weight: 600; color: #ffffff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">multi-module-architecture-proposal</div>
-      <div style="font-size: 11.5px; color: #8b8b8b;">updated Sep 20, 14:30</div>
+      <div style="font-size: 14px; font-weight: 600; color: #ffffff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">Agent Control Center</div>
+      <div style="font-size: 11.5px; color: #8b8b8b;">{{ repoCountLabel }}</div>
     </div>
 
     <div style="display: flex; align-items: center; gap: 4px;">
@@ -345,40 +345,10 @@ button { font: inherit; }
             <div style="flex-grow: 1;">Entry</div>
           </div>
 
-          <div class="cc-row">
-            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
-            <div style="flex-grow: 1;">e2e-tests repo created, session up, bootstrap dispatched — 2a/2b formalization plus new 2c coverage</div>
-          </div>
-
-          <div class="cc-row">
-            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
-            <div style="flex-grow: 1;">checkProductAccess RPC built — uniform for tiered and untiered products</div>
-          </div>
-
-          <div class="cc-row">
-            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
-            <div style="flex-grow: 1;">Catalog retrofit migrated — pr-checks now fully paid, starter gap closed</div>
-          </div>
-
-          <div class="cc-row">
-            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
-            <div style="flex-grow: 1;">portal-service SUPPORT_SERVICE wiring recovered onto a fresh PR #2, merged — 2c wired end to end</div>
-          </div>
-
-          <div class="cc-row">
-            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 20</div>
-            <div style="flex-grow: 1;">Rollout sequence fixed — A, then B, then C; do not skip ahead</div>
-          </div>
-
-          <div class="cc-row">
-            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 19</div>
-            <div style="flex-grow: 1;">Three repos found that were not in the original 11 — portal-service, ops-console, ui-components</div>
-          </div>
-
-          <div class="cc-row" style="border-bottom: 1px solid #2b2b2b;">
-            <div class="cc-mono" style="width: 90px; color: #8b8b8b;">Sep 19</div>
-            <div style="flex-grow: 1;">Local wrangler dev multi-worker test passed — 2a + 2b with real token mint, zero mocks</div>
-          </div>
+          <!-- No narrative-log data source exists yet (unlike repos/
+               findings/tasks, nothing in db.ts backs this tab) — showing
+               a real empty state instead of fixture rows until it does. -->
+          <div style="padding: 8px 0; font-size: 11.5px; color: #8b8b8b;">Nothing logged yet.</div>
         </div>
       </sc-if>
 
@@ -751,7 +721,11 @@ class Component extends DCLogic {
     }
 
     function dispatchNow(targets, dispatchId, text) {
-      var stamp = 'Sep 20 ' + clock().slice(0, 5);
+      // Time only, matching db.ts's own clock() format — no fake
+      // date prefix. This is a local optimistic value anyway; the
+      // daemon's real markDispatchSent() sets the authoritative 'at'
+      // on the next re-render.
+      var stamp = clock();
       var nextLogs = {};
       Object.keys(logs).forEach(function (k) { nextLogs[k] = logs[k]; });
       var nextRepos = repos.map(function (r) {
@@ -1054,6 +1028,7 @@ class Component extends DCLogic {
       linksDotStyle: 'width: 7px; height: 7px; border-radius: 50%; '
         + (showLinks ? 'background: #4daafc;' : 'border: 1px solid #6e6e6e;'),
       repoRows: repoRows,
+      repoCountLabel: repos.length === 0 ? 'no repos tracked' : (repos.length === 1 ? '1 repo tracked' : repos.length + ' repos tracked'),
       closeDrawer: function () { self.setState({ drawerFor: null, drawerMode: '' }); },
       dispatchToAll: function () {
         self.setState({ composerScope: 'all', composerRepo: null, composerDispatch: null, composerText: '', menuFor: null });

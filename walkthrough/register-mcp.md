@@ -13,9 +13,11 @@ you can see exactly what it wrote.
 — the CLI alternative, for `~/.claude.json`-based (user- or project-scoped) registration instead of
 a file in the repo. Only copies; nothing runs until you paste it into a terminal yourself.
 
-Either way, both are computed from where this extension is actually installed, not a hardcoded path
-(a dev checkout and an installed `.vsix` sit in different places, so a fixed path in this markdown
-would be wrong for one of them).
+Either way, both are computed from where this extension is actually installed *and* which DB this
+install's daemon actually watches, not hardcoded (a dev checkout and an installed `.vsix` sit in
+different places, and the DB path — `--db`, always included — matters just as much as the script
+path: without it pointing at the same file the dashboard uses, dispatches sent through MCP would
+succeed but never be picked up by anything).
 
 This only reaches **new** sessions — one already running won't pick it up without a restart.
 Verify with `claude mcp list`.
