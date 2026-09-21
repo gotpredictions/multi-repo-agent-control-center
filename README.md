@@ -112,6 +112,19 @@ result lands in `repos.summary`, surfaced by `list_repos`/`get_repo_status`. Ref
 via `refresh_repo_summary`. Verified end-to-end against a real repo — the summary correctly flagged
 one as half-bootstrapped template scaffolding before any real dispatch hit that surprise.
 
+**Repo agents prefer whatever `claude` is already on `PATH`, not the Agent SDK's bundled copy.**
+`query()` defaults to the SDK's own bundled native binary — one of 8 per-platform
+`optionalDependencies` (`@anthropic-ai/claude-agent-sdk-<platform>`, ~200MB each) — unless
+`pathToClaudeCodeExecutable` is set. That bundled copy still needs its own separate auth (an API
+key), which buys nothing for someone who, by construction, already has Claude Code installed and
+authenticated to drive this tool's coordinator session in the first place. `agentRunner.ts` now
+walks `PATH` once per daemon run (`resolveClaudeExecutable`, cached) and points `query()` at a
+system-installed `claude` if it finds one — same binary, already authenticated — falling back to
+the bundled one only if nothing's found on `PATH`. Logged once to the daemon's stderr (visible in
+the "Agent Control Center" Output channel), not per-dispatch. This is also what makes VS Code
+Marketplace publishing tractable at all: see "Not yet published to the VS Code Marketplace" below
+for why the bundled binary was the real blocker there, not just a size nuisance.
+
 **Requirement lifecycle — coordinator-set, not a dashboard control.** `get_requirement_phase` /
 `set_requirement_phase` track one requirement's progress through `critique → plan → implement →
 closing → done` (`meta` table, not a new schema addition — the key/value store already existed for
@@ -237,6 +250,31 @@ rendering, checkpoints, permission UX, todo tracking, and the rest of that polis
 surface. MCP + an external interactive coordinator session gets all of that for free; this
 wouldn't, unless rebuilt by hand. Worth revisiting if cruise control's ceiling turns out to matter
 in practice, not before.
+
+## Not yet published to the VS Code Marketplace
+
+Distributed today as a GitHub release with `control-center.vsix` attached, not a Marketplace
+listing. What that would actually take, checked directly against `vsce` (already a devDependency
+here) rather than assumed:
+
+- A registered Marketplace publisher (Azure DevOps org + a Personal Access Token scoped to
+  "Marketplace (Manage)"), matching `package.json`'s `publisher` field — currently `"local-dev"`, a
+  placeholder.
+- `"private": true` needs to come out of `package.json`; `"repository"` is still `{ "url": "local" }`,
+  a placeholder from before this repo had a real GitHub remote.
+- A `LICENSE` file — `vsce package` has been warning about its absence on every single package run
+  in this repo's history so far; non-fatal, easy to miss.
+- An icon and a `.vscodeignore` (packaging currently ships raw `node_modules` wholesale — 4700+
+  files — rather than trimming dev-only cruft).
+- The real blocker, not just a nuisance: the Agent SDK's bundled native binary is platform-specific
+  (only the one matching whatever machine ran `npm install` gets pulled in — confirmed by checking
+  this repo's own `node_modules`), so a single `.vsix` published as-is would be broken for anyone
+  not on that exact platform. `vsce publish` does support per-platform targets
+  (`--target win32-x64`, `linux-x64`, …), but that means installing and publishing each target
+  separately — real ongoing packaging work. Preferring a system-installed `claude` on `PATH` (see
+  "Repo agents prefer whatever `claude` is already on `PATH`" above) removes the *need* for the
+  bundled binary in the common case, which is what actually makes multi-target publishing avoidable
+  rather than just smaller.
 
 ## Known limitations (v1, ad hoc)
 

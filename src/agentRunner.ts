@@ -89,6 +89,50 @@ function isWithinTmp(filePath: unknown): boolean {
   return TMP_ROOTS.some((root) => realInputAncestor === root || realInputAncestor.startsWith(root + path.sep));
 }
 
+// query() defaults to the Agent SDK's own bundled native binary
+// (@anthropic-ai/claude-agent-sdk-<platform>, ~200MB per platform, all 8
+// pulled in as optionalDependencies) unless pathToClaudeCodeExecutable is
+// set. That bundled copy still needs its own auth (an API key) separate
+// from whatever the user already logged into — bundling it buys nothing
+// for someone who, by construction, already has Claude Code installed and
+// authenticated to run this tool's own coordinator in the first place.
+// Prefer whatever `claude` is already on PATH: same binary already
+// authenticated, and it means this extension doesn't need to ship (or
+// correctly target-match) a multi-hundred-MB native binary per platform
+// at all. Falls back to the bundled one (this returns null, leaving
+// pathToClaudeCodeExecutable unset) if nothing is found on PATH — a
+// system without Claude Code installed at all is an unusual case for a
+// tool whose whole purpose is coordinating Claude Code work, but it
+// shouldn't hard-fail over it.
+let cachedClaudeExecutable: string | null | undefined;
+
+function resolveClaudeExecutable(): string | null {
+  if (cachedClaudeExecutable !== undefined) return cachedClaudeExecutable;
+  const names = process.platform === "win32" ? ["claude.exe", "claude.cmd", "claude"] : ["claude"];
+  const dirs = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        cachedClaudeExecutable = candidate;
+        // Logged to stderr (piped to the extension's Output channel by
+        // extension.ts's RunnerClient), once, not per-dispatch — this is a
+        // daemon-wide fact, not a per-repo event.
+        console.error(`[agentRunner] using system claude on PATH: ${candidate}`);
+        return candidate;
+      } catch {
+        // not here — keep looking
+      }
+    }
+  }
+  cachedClaudeExecutable = null;
+  console.error(
+    "[agentRunner] no claude executable found on PATH — falling back to the Agent SDK's own bundled binary, which needs its own separate auth."
+  );
+  return null;
+}
+
 // Denies (well, escalates) obviously catastrophic patterns rather than
 // trying to allowlist "safe" commands — an allowlist would just
 // recreate the same friction this fix exists to remove. Not exhaustive;
@@ -239,6 +283,7 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
       tools: [askHumanTool],
     });
 
+    const claudeExecutable = resolveClaudeExecutable();
     const stream = query({
       prompt: text + ASK_HUMAN_INSTRUCTION,
       options: {
@@ -246,6 +291,7 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
         canUseTool,
         permissionMode: "default",
         mcpServers: { "control-center": controlCenterTools },
+        ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
       },
     } as any);
 
