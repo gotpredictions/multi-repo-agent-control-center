@@ -313,6 +313,7 @@ export function activate(context: vscode.ExtensionContext) {
     if (!panel) return;
     const bootstrap = toBootstrap(snapshot);
     if (isFirstRender) {
+      out.appendLine(`[extension] assigning panel.webview.html now, t=${Date.now()}`);
       panel.webview.html = renderDashboardHtml(panel.webview, mediaRoot, bootstrap);
     } else {
       panel.webview.postMessage({ type: "snapshot", data: bootstrap });
