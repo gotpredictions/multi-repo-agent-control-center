@@ -91,14 +91,20 @@ repos until you explicitly start one from the dot menu, which also queues that r
 ### Registering the MCP server with a coordinator session
 
 ```bash
-claude mcp add --scope user control-center -- node /Users/evso/code/multi-repo-agent-control-center/out/mcpServer.js
+claude mcp add --scope project control-center -- node <this-install's-out>/mcpServer.js
 ```
 
-`--scope user` makes it available from any project/session on this machine, not just one repo —
-appropriate here since a "coordinator" isn't tied to any single repo. Verify with `claude mcp list`
-(should show `control-center — ✔ Connected`). Registering doesn't reach sessions already
-running — MCP servers load at session start, not hot-reloaded into one already open, so an
-existing session needs to be restarted before it'll see this tool.
+Don't hand-type the path — run **"Agent Control Center: Copy MCP Registration Command"** from the
+Command Palette (or use the walkthrough's button for it) to get the exact command for *this*
+install copied to your clipboard. It's computed from where the extension actually is
+(`context.extensionUri`), which differs between an `F5` dev checkout and an installed `.vsix` — a
+path hardcoded here would only ever be right for one of them.
+
+`--scope project` registers it for sessions run from the current project only; use `--scope user`
+instead for every project on this machine. Verify with `claude mcp list` (should show
+`control-center — ✔ Connected`). Registering doesn't reach sessions already running — MCP servers
+load at session start, not hot-reloaded into one already open, so an existing session needs to be
+restarted before it'll see this tool.
 
 (Hand-editing `~/.claude.json`'s `mcpServers` key directly works too, in principle, but it's Claude
 Code's own live state file — rewritten by every running session for history/settings/etc. —

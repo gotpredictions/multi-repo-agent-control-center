@@ -141,8 +141,9 @@ export function activate(context: vscode.ExtensionContext) {
   const serverScript = path.join(context.extensionUri.fsPath, "out", "server.js");
   const mcpServerScript = path.join(context.extensionUri.fsPath, "out", "mcpServer.js");
   const dbPath = path.join(context.globalStorageUri.fsPath, "control-center.db");
+  const mcpRegisterCommand = `claude mcp add --scope project control-center -- node ${mcpServerScript}`;
   out.appendLine(`DB: ${dbPath}`);
-  out.appendLine(`To register the MCP server: claude mcp add --scope project control-center -- node ${mcpServerScript}`);
+  out.appendLine(`To register the MCP server: ${mcpRegisterCommand}`);
 
   // Shown once per install of this extension (globalState survives
   // updates but not uninstall/reinstall) — not added to any user- or
@@ -328,7 +329,30 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage("Agent Control Center data cleared.");
   });
 
-  context.subscriptions.push(openDashboard, restartRunner, resetAllData, { dispose: () => runner.dispose() }, out);
+  const copyMcpRegistrationCommand = vscode.commands.registerCommand(
+    "multiRepoAgentControlCenter.copyMcpRegistrationCommand",
+    async () => {
+      // Copies, doesn't run — registering an MCP server is the user's
+      // call, not something this extension does to their config on its
+      // own. This just saves finding the right path by hand: it's
+      // computed from context.extensionUri, so it's always correct for
+      // wherever THIS install actually is (dev checkout vs. installed
+      // .vsix are different paths, and a hardcoded one in a README or
+      // walkthrough would be wrong for whichever case it wasn't written
+      // for).
+      await vscode.env.clipboard.writeText(mcpRegisterCommand);
+      vscode.window.showInformationMessage("MCP registration command copied — paste it into a terminal to run it.");
+    }
+  );
+
+  context.subscriptions.push(
+    openDashboard,
+    restartRunner,
+    resetAllData,
+    copyMcpRegistrationCommand,
+    { dispose: () => runner.dispose() },
+    out
+  );
 }
 
 function renderDashboardHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, bootstrap: unknown): string {

@@ -1,14 +1,17 @@
 ## Let a coordinator session dispatch to it
 
 The dashboard is only half of this. To let a Claude Code session act as a coordinator — dispatching
-work, resolving escalations, adding repos it already knows about — register the MCP server with the
-exact `claude mcp add` command for **your** install (it's logged, ready to copy, in the "Agent
-Control Center" Output channel — Output view → select that channel).
+work, resolving escalations, adding repos it already knows about — register the MCP server.
+
+**[Copy the registration command](command:multiRepoAgentControlCenter.copyMcpRegistrationCommand)**
+— computed from where this extension is actually installed, not a hardcoded path (a dev checkout
+and an installed `.vsix` sit in different places, so a fixed path here would be wrong for one of
+them). It only copies the command; nothing runs until you paste it into a terminal yourself.
 
 It looks like:
 
 ```bash
-claude mcp add --scope project control-center -- node /path/to/this/extension/out/mcpServer.js
+claude mcp add --scope project control-center -- node <this-install's-real-path>/out/mcpServer.js
 ```
 
 `--scope project` registers it for sessions run from the current project only — use `--scope user`

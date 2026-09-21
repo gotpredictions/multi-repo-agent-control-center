@@ -2,7 +2,7 @@
   "name": "multi-repo-agent-control-center",
   "displayName": "Multi-Repo Agent Control Center",
   "description": "Local dashboard for coordinating coding-agent sessions across multiple repos.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "local-dev",
   "private": true,
   "repository": {
@@ -34,6 +34,10 @@
       {
         "command": "multiRepoAgentControlCenter.resetAllData",
         "title": "Agent Control Center: Reset All Data"
+      },
+      {
+        "command": "multiRepoAgentControlCenter.copyMcpRegistrationCommand",
+        "title": "Agent Control Center: Copy MCP Registration Command"
       }
     ],
     "walkthroughs": [
