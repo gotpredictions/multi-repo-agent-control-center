@@ -552,21 +552,11 @@ class Component extends DCLogic {
     // resetting whatever tab/menu/drawer/scroll state is currently open.
     this.handleHostMessage = this.handleHostMessage.bind(this);
     window.addEventListener('message', this.handleHostMessage);
-    // Temporary debug instrumentation — see window.__ccLog's own comment.
-    if (window.__ccLog) {
-      window.__ccLog('Component constructed, t=' + Date.now());
-      var srcTags = [...document.querySelectorAll('script[src]')].map(function (s) { return s.getAttribute('src'); });
-      window.__ccLog('script[src] tags in DOM (' + srcTags.length + '): ' + JSON.stringify(srcTags));
-      document.addEventListener('visibilitychange', function () {
-        window.__ccLog('visibilitychange -> ' + document.visibilityState + ', t=' + Date.now());
-      });
-    }
   }
 
   handleHostMessage(event) {
     var msg = event.data;
     if (!msg || msg.type !== 'snapshot') { return; }
-    if (window.__ccLog) window.__ccLog('snapshot message received, t=' + Date.now());
     var data = msg.data || {};
     this.setState({
       repos: data.repos || [],

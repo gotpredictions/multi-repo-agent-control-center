@@ -284,15 +284,36 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   async function syncFromDaemon() {
+    // Claiming "I'm the first render" has to happen synchronously, before
+    // the first await below — not after, which is where it lived until a
+    // real, confirmed bug: r.onUpdate fires on every db.onChange, which
+    // happens very often (each dispatch's tool-call log line is its own
+    // write), so two overlapping syncFromDaemon() calls were a real
+    // occurrence, not a hypothetical. Both would reach `await
+    // runner.call("snapshot")`, and whichever's response happened to land
+    // second would still see panelInitialized === false — the flag hadn't
+    // been set yet, because the call that should have set it was itself
+    // still awaiting. Both then set panel.webview.html, and with
+    // retainContextWhenHidden the webview didn't cleanly replace on the
+    // second assignment — it ended up with two full copies of every
+    // <script> tag (react.js, react-dom.js, support.js) loaded into the
+    // same document, confirmed directly via document.querySelectorAll
+    // ('script[src]') during live debugging. That's what was crashing the
+    // dashboard: two independent boot passes racing over the same shared
+    // runtime state. Checking and setting the flag in the same synchronous
+    // step, before any await, closes the window entirely — a second
+    // overlapping call now sees isFirstRender === false immediately, no
+    // race possible regardless of how the two calls interleave afterward.
+    const isFirstRender = !panelInitialized;
+    if (isFirstRender) panelInitialized = true;
     await runner.ready;
     const snapshot = await runner.call("snapshot");
     tailLogsToOutputChannels(snapshot);
     notifyNewEscalations(snapshot);
     if (!panel) return;
     const bootstrap = toBootstrap(snapshot);
-    if (!panelInitialized) {
+    if (isFirstRender) {
       panel.webview.html = renderDashboardHtml(panel.webview, mediaRoot, bootstrap);
-      panelInitialized = true;
     } else {
       panel.webview.postMessage({ type: "snapshot", data: bootstrap });
     }
