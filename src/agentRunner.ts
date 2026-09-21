@@ -150,6 +150,20 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
       if (ALWAYS_SAFE_TOOLS.has(toolName)) {
         return { behavior: "allow", updatedInput: input };
       }
+      // The SDK routes calls to our OWN control-center MCP tools (namespaced
+      // mcp__control-center__*, e.g. ask_human) through this same gate — so
+      // without this, calling ask_human triggered a bogus generic permission
+      // escalation ("Allow mcp__control-center__ask_human?") BEFORE the tool
+      // handler ever ran to open the real, meaningful reply escalation with
+      // the agent's actual question. That left the human clicking through a
+      // content-free prompt first, then the real one — confirmed live: the
+      // first prompt's placeholder had nothing to show because there was no
+      // real question yet, just the raw tool-call args. ask_human's handler
+      // (below) already does its own, correct openAndAwait — gating the call
+      // itself here adds a redundant prompt, not a second layer of safety.
+      if (toolName.startsWith("mcp__control-center__")) {
+        return { behavior: "allow", updatedInput: input };
+      }
       if ((toolName === "Write" || toolName === "Edit") && isWithinCwd(input.file_path, repo.cwd)) {
         return { behavior: "allow", updatedInput: input };
       }
@@ -159,8 +173,10 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
 
       // Everything else actually escalates: a Write/Edit outside the
       // repo's own cwd, a Bash command matching the danger patterns, or
-      // any tool this list doesn't already know is routine.
-      db.appendLog(repo.id, "ask", `permission needed — ${toolName}(${JSON.stringify(input).slice(0, 120)})`);
+      // any tool this list doesn't already know is routine. Logged in full
+      // (not truncated) so the Output channel actually has what the
+      // escalation is about, not just a 120-char fragment.
+      db.appendLog(repo.id, "ask", `permission needed — ${toolName}(${JSON.stringify(input, null, 2)})`);
       const answer = await openAndAwait(
         "permission",
         `Allow ${toolName}?\n\n${JSON.stringify(input, null, 2)}`,
@@ -183,7 +199,7 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
         options: z.array(z.string()).optional().describe("Short labels for the natural choices, if there are any (e.g. ['Commit only', 'Commit and deploy', 'Do neither']). Omit for a fully open question."),
       },
       async (args: { question: string; options?: string[] }) => {
-        db.appendLog(repo.id, "ask", args.question.split("\n")[0].slice(0, 120));
+        db.appendLog(repo.id, "ask", args.question);
         const opts: EscalationOption[] = (args.options ?? ["Yes", "No"]).map((label, i) => ({
           id: `opt-${i}`,
           label,
@@ -217,7 +233,15 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
           if (b.type === "text" && b.text) {
             finalText = b.text;
           } else if (b.type === "tool_use") {
-            db.appendLog(repo.id, "bash", `${b.name}(${JSON.stringify(b.input ?? {}).slice(0, 100)})`);
+            // Skip control-center's own tools (ask_human) here — their
+            // handler already logs a clean, untruncated "[ask]" line with
+            // the actual question right after this would've fired. Logging
+            // both meant the human saw this generic echo first, truncated
+            // to 100 chars mid-sentence, with no way to tell it was about
+            // to be followed by the real, full question.
+            if (!String(b.name).startsWith("mcp__control-center__")) {
+              db.appendLog(repo.id, "bash", `${b.name}(${JSON.stringify(b.input ?? {}).slice(0, 100)})`);
+            }
           }
         }
       } else if (type === "result") {

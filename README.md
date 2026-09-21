@@ -56,7 +56,21 @@ own design conversation for why):
   and/or deploy?"). Neither is answerable by queuing another dispatch — the daemon's dispatch loop
   skips any repo whose `agent_status` is `needsHuman` until its escalation is resolved. Answered via
   a native `showQuickPick` (options as `{label, detail}`, plus a "Type something…" free-text
-  fallback via `showInputBox`) — not a webview panel.
+  fallback via `showInputBox`) — not a webview panel. For anything longer than one short line —
+  a permission escalation's `Allow <tool>?\n\n<pretty JSON args>`, or a longer `ask_human`
+  question — `answerEscalation` shows a modal dialog with the full text first (a QuickPick's
+  `placeHolder` is one truncated line, not enough to actually read what's being asked); short,
+  single-line escalations skip straight to the picker.
+
+  `ask_human` is itself an SDK tool call (namespaced `mcp__control-center__ask_human` by the
+  SDK), so without an explicit exception it went through `canUseTool` like any other tool — meaning
+  every `ask_human` call opened a **second**, bogus `permission` escalation ("Allow
+  mcp__control-center__ask_human?") asking whether to allow the call at all, on top of the real
+  `reply` escalation the tool's own handler opens with the agent's actual question. Confirmed live
+  in a repo's Output channel: `[ask] permission needed — mcp__control-center__ask_human(...)`
+  (truncated, content-free) immediately followed by the real question once that was approved.
+  Fixed by auto-allowing any `mcp__control-center__*` tool call in `canUseTool` — the tool's own
+  handler is already the correct, sole escalation path for it.
 - **Findings** — a durable log, not a live channel. Decisions an agent made autonomously along the
   way, or items it surfaced that are waiting on a human. Answering one here only records the
   decision; relaying it back to the agent is a separate, later dispatch. Also where a

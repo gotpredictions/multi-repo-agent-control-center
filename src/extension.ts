@@ -242,11 +242,31 @@ export function activate(context: vscode.ExtensionContext) {
       isTypeSomething: true,
     });
 
+    const fullText = String(esc.text);
+    const firstLine = fullText.split("\n")[0];
+    // showQuickPick's placeHolder is one truncated line — fine for a short
+    // ask_human question, not for a permission escalation's text ("Allow
+    // <tool>?\n\n<pretty JSON args>") or a longer question, both of which
+    // that placeholder was silently cutting down to nothing useful (a human
+    // had to answer Approve/Decline with no legible basis for the call).
+    // A modal dialog's `detail` actually wraps and scrolls, so show the
+    // full text there first whenever the placeholder alone wouldn't cover
+    // it — skipped for the common short one-line case to avoid an extra
+    // click on every trivial escalation.
+    if (fullText.length > firstLine.length || firstLine.length > 200) {
+      const proceed = await vscode.window.showInformationMessage(
+        (esc.kind === "reply" ? "Question from " : "Permission requested by ") + (esc.asked_by || repoId),
+        { modal: true, detail: fullText },
+        "Answer…"
+      );
+      if (proceed !== "Answer…") return;
+    }
+
     const picked = await vscode.window.showQuickPick(items, {
       title:
         (esc.kind === "reply" ? "Awaiting reply" : "Permission required") +
         (esc.asked_by ? ` — requested by ${esc.asked_by}` : ""),
-      placeHolder: String(esc.text).split("\n")[0].slice(0, 200),
+      placeHolder: firstLine.slice(0, 200),
       ignoreFocusOut: true,
     });
     if (!picked) return;
