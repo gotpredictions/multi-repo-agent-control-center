@@ -164,7 +164,7 @@ button { font: inherit; }
                       <div style="display: flex; align-items: center; gap: 8px;">
                         <button type="button" style="{{ saveBtnStyle }}" onClick="{{ row.newDispatch }}">+ New dispatch</button>
                         <button type="button" style="{{ row.pauseBtnStyle }}" onClick="{{ row.togglePause }}">{{ row.pauseLabel }}</button>
-                        <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ closeDrawer }}">Close</button>
+                        <button type="button" aria-label="Close" style="{{ cancelBtnStyle }}" onClick="{{ closeDrawer }}">×</button>
                       </div>
                     </div>
 
@@ -775,6 +775,13 @@ class Component extends DCLogic {
 
     var repoRows = repos.map(function (r, i) {
       var queued = r.dispatches.filter(function (d) { return d.state === 'queued'; }).length;
+      // "queued" alone is a false-empty signal the moment the daemon picks a
+      // dispatch up: state flips to 'sent' right away, well before a
+      // response exists, so a row can show "0 queued" while real work is
+      // still in flight and nobody's looked at the result yet. Surface that
+      // state (same 'awaiting' definition the per-item drawer already uses
+      // below) at the row level too, since that's the glanceable view.
+      var awaitingReply = r.dispatches.filter(function (d) { return d.state === 'sent' && !d.response; }).length;
       var menuItems = [];
       if (r.agent === 'stopped') {
         menuItems.push({
@@ -859,11 +866,15 @@ class Component extends DCLogic {
         })(),
         menuItems: menuItems.map(function (m) { return { label: m.label, style: menuItemStyle, pick: m.pick }; }),
 
-        queueLabel: r.dispatches.length === 0
-          ? 'none'
-          : (queued + ' queued' + (r.paused ? ' · paused' : '')),
+        queueLabel: (function () {
+          if (r.dispatches.length === 0) return 'none';
+          var parts = [];
+          if (queued > 0) parts.push(queued + ' queued');
+          if (awaitingReply > 0) parts.push(awaitingReply + ' awaiting reply');
+          return (parts.length ? parts.join(', ') : 'all answered') + (r.paused ? ' · paused' : '');
+        })(),
         queueBtnStyle: smallGhost + 'border: 1px solid #3c3c3c; background: transparent; color: '
-          + (r.paused ? '#d7ba7d;' : (queued > 0 ? '#cccccc;' : '#8b8b8b;')),
+          + (r.paused ? '#d7ba7d;' : ((queued > 0 || awaitingReply > 0) ? '#cccccc;' : '#8b8b8b;')),
         openDispatches: function () { self.setState({ drawerFor: r.id, drawerMode: 'dispatches', menuFor: null }); },
         dispatchOpen: drawerFor === r.id && drawerMode === 'dispatches',
         pauseLabel: r.paused ? 'Resume queue' : 'Pause queue',
