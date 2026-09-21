@@ -61,8 +61,6 @@ one as half-bootstrapped template scaffolding before any real dispatch hit that 
 
 ## Known limitations (v1, ad hoc)
 
-- The webview does a full HTML re-render on every DB change rather than patching state in place —
-  transient UI (an open menu, an open dispatch drawer) resets on each update.
 - "Dispatch now" vs "queue" both land as an ordinary FIFO-queued dispatch; there's no queue-jump
   (the `intro` dispatch is the one deliberate exception — see above).
 - Editing an already-queued dispatch's text lands as a new queued dispatch, not an in-place edit.

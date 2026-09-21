@@ -165,13 +165,27 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   let panel: vscode.WebviewPanel | undefined;
+  // A live dispatch appends a log line per tool call, each of which fires
+  // db.onChange — without this, that meant a full webview.html
+  // replacement (the whole page torn down and rebuilt) potentially dozens
+  // of times during one dispatch: visible flicker, lost scroll position,
+  // any open menu/drawer reset, the dashboard effectively unusable while
+  // something was actually running. Only the FIRST render sets .html; every
+  // update after that posts fresh data into the page still-loaded there,
+  // and dashboard.html's Component merges it into state in place.
+  let panelInitialized = false;
 
   async function renderPanel() {
     if (!panel) return;
     await runner.ready;
     const snapshot = await runner.call("snapshot");
     const bootstrap = toBootstrap(snapshot);
-    panel.webview.html = renderDashboardHtml(panel.webview, mediaRoot, bootstrap);
+    if (!panelInitialized) {
+      panel.webview.html = renderDashboardHtml(panel.webview, mediaRoot, bootstrap);
+      panelInitialized = true;
+    } else {
+      panel.webview.postMessage({ type: "snapshot", data: bootstrap });
+    }
   }
 
   // Deliberately "node" from PATH, not process.execPath — inside the
@@ -256,6 +270,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
     panel.onDidDispose(() => {
       panel = undefined;
+      panelInitialized = false;
     });
     panel.webview.onDidReceiveMessage(async (msg) => {
       try {

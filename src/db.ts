@@ -229,6 +229,29 @@ export class Db {
     this.conn.exec("PRAGMA journal_mode = WAL;");
     this.conn.exec("PRAGMA busy_timeout = 3000;");
     this.conn.exec(SCHEMA);
+    this.migrate();
+  }
+
+  // CREATE TABLE IF NOT EXISTS only helps a brand-new database file —
+  // it's a no-op against an existing one from an earlier version of this
+  // schema, so every column added after a table's first release needs an
+  // explicit ALTER TABLE here too, or an existing DB just breaks on the
+  // first query that touches the new column (exactly what happened:
+  // 'no such column: d.responded_at' against a DB created before that
+  // column existed). Additive only — this doesn't handle renames or
+  // drops, which this schema hasn't needed yet.
+  private migrate() {
+    const ensureColumn = (table: string, column: string, definition: string) => {
+      const cols = this.conn.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!cols.some((c) => c.name === column)) {
+        this.conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      }
+    };
+    ensureColumn("dispatches", "kind", "TEXT NOT NULL DEFAULT 'user'");
+    ensureColumn("dispatches", "responded_at", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn("escalations", "kind", "TEXT NOT NULL DEFAULT 'permission'");
+    ensureColumn("repos", "summary", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn("repos", "stage", "TEXT NOT NULL DEFAULT 'critique'");
   }
 
   onChange(cb: () => void) {

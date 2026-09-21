@@ -487,6 +487,27 @@ class Component extends DCLogic {
       items: __bootstrap ? __bootstrap.items : [],
       log: __bootstrap ? __bootstrap.log : []
     };
+
+    // After the first full render, the extension host pushes fresh data
+    // via postMessage instead of replacing the whole page (see
+    // extension.ts's renderPanel) — merge just the data keys into
+    // state so a dispatch's log lines update the dashboard live without
+    // resetting whatever tab/menu/drawer/scroll state is currently open.
+    this.handleHostMessage = this.handleHostMessage.bind(this);
+    window.addEventListener('message', this.handleHostMessage);
+  }
+
+  handleHostMessage(event) {
+    var msg = event.data;
+    if (!msg || msg.type !== 'snapshot') { return; }
+    var data = msg.data || {};
+    this.setState({
+      repos: data.repos || [],
+      items: data.items || [],
+      taskDefs: data.tasks || [],
+      logs: data.logs || {},
+      log: data.log || []
+    });
   }
 
   renderVals() {
