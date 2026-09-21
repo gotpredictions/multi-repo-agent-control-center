@@ -132,9 +132,14 @@ was still clickable and locally-stateful until this was wired up; fixed so the o
 is a coordinator actually calling `set_requirement_phase`, matching the "not something we can click
 around" requirement above. Renders all steps dim/neutral when nothing has been set yet.
 
-**Two known layout-clipping bugs, now covered by `npm run check`.** Both had the same shape: a
-box's declared size didn't match what it could actually contain, and the overflow silently bled
-into a neighbor instead of erroring.
+**Layout bugs from the div/flex "fake table" pattern, now covered by `npm run check`.** The Repos
+tab, the Plan tab's list view, and the Findings tab all fake table columns out of fixed-width flex
+divs rather than a real `<table>` — a literal `<table>`/`<tr>`/`<td>` tree doesn't work in this
+template runtime: a raw parse confirmed the browser's HTML5 tree-construction rules foster-parent
+row/cell elements straight out of `sc-for` (the repeat element `dashboard.html` uses throughout)
+whenever it wraps them inside a real `table` element, since `sc-for` isn't part of the table
+content model and the parser doesn't know it's meant to be transparent — `sc-for` ends up with no
+children at all, silently, not a loud failure. That shape produced three real bugs, all fixed now:
 - The repo-row dot menu (`Watch output` / `Stop agent` / …) used to be `position: absolute` against
   its table row, which sits inside `.cc-scrollx` (`overflow-x: auto`, for the wide table on narrow
   windows). Per the CSS overflow spec, leaving `overflow-y` unspecified while `overflow-x` is
@@ -144,16 +149,35 @@ into a neighbor instead of erroring.
   `getBoundingClientRect()` at click time — a fixed element's containing block is the viewport
   (nothing here sets `transform`/`filter`/`perspective`), so it escapes that clip regardless of
   which row opened it.
-- The Plan tab's list view gives each row a fixed `height: 18px` rather than `min-height`, so a
-  status label that wrapped to two lines (`Not started` didn't fit its 100px column without
-  `white-space: nowrap`) painted its second line over the next row instead of pushing it down or
-  being clipped — the Gantt view has no wrapping text columns, so it never showed this. Fixed with
-  `white-space: nowrap` on the status column plus `overflow: hidden` on the row itself as a
-  backstop against the same shape of bug recurring there.
+- The Plan tab's list view and the Findings tab both gave rows a fixed/no-op height with
+  `align-items: center` rather than real per-cell sizing, so a status label that wrapped
+  (`Not started` didn't fit its 100px column) or a long multi-paragraph finding painted or floated
+  over the row's other columns instead of the row genuinely growing to fit, or those columns
+  anchoring to the top of it. The Gantt view never showed either shape of this — every one of its
+  labels is `white-space: nowrap` with ellipsis truncation and its bars are absolutely positioned at
+  a fixed, index-computed offset, so nothing in it is ever sized by variable content. Fixed by
+  replacing both fake tables' row markup with genuine CSS table layout — `display: table` /
+  `table-row` / `table-cell` on the same divs, `table-layout: fixed` for consistent columns,
+  `vertical-align` per cell — real table sizing without ever emitting a `table`/`tr`/`td` tag, so
+  `sc-for` still just wraps a plain div and never trips the foster-parenting behavior above.
+- Losing the Findings tab's ability to scroll was a side effect of switching it to CSS table layout:
+  vertical scrolling for every tab was riding entirely on `.cc-scrollx`'s `overflow-x: auto`
+  incidentally computing `overflow-y: auto` too (the same spec quirk as the dot-menu bug) — which
+  happened to produce a scrollable box only because that div's height was, until then, always small
+  enough relative to its content for the browser to notice it needed one. The `display: table` box
+  measures differently in that same incidental setup and stopped triggering it, losing scroll
+  entirely rather than clipping — a sign this was never a real scroll container to begin with, just
+  one that happened to work by accident for three of the four tabs. Fixed properly instead: the
+  shared content area (holding whichever tab is active) is now `display: flex; flex-direction:
+  column`, and each tab's own top-level wrapper gets `flex: 1 1 auto; min-height: 0; overflow-y:
+  auto` — the standard deterministic "flex scroll container" shape, applied uniformly to all four
+  tabs rather than only the one that happened to be reported.
 
-`scripts/check-dashboard-layout.js` statically asserts both fixes stay in place (parses
-`dashboard.html` for the specific style tokens each relies on) and runs as part of `npm run
-package`, so packaging a regression on either fails loudly instead of shipping quietly.
+`scripts/check-dashboard-layout.js` statically asserts all of this stays in place (parses
+`dashboard.html` for the specific style tokens each fix relies on, and fails loudly if either the
+Plan-list or Findings tab's table markup reverts to a literal `table`/`tr`/`td` element) and runs as
+part of `npm run package`, so packaging a regression on any of it fails loudly instead of shipping
+quietly.
 
 ## Known limitations (v1, ad hoc)
 

@@ -60,7 +60,24 @@ button { font: inherit; }
       </sc-for>
     </div>
 
-    <div style="position: relative; flex-grow: 1; min-height: 0; overflow: hidden;">
+    <!-- display: flex here (was just position: relative) so each tab's
+         own wrapper below becomes a genuine flex item with a definite
+         height from this box's own flex-grow/min-height:0 — without that,
+         a plain block child just sizes to its own content and overflows
+         this box's fixed height with nothing to scroll it, since this
+         box's own overflow: hidden only clips, it doesn't create a
+         scrollbar. Vertical scrolling for any tab's content was riding
+         entirely on .cc-scrollx's overflow-x: auto incidentally computing
+         overflow-y: auto too (the same CSS quirk documented above for the
+         dot menu) — which happened to produce a scrollable box only
+         because that div's height was, until now, always small enough
+         relative to its content's natural size for the browser to notice
+         it needed one. The Findings table's CSS-table display box measures
+         differently in that same incidental setup and stopped triggering
+         it, losing scroll entirely rather than clipping — a sign this was
+         never a real scroll container, just one that happened to work by
+         accident. Fixed properly below on each tab's own wrapper instead. -->
+    <div style="position: relative; flex-grow: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;">
 
       <sc-if value="{{ composerOpen }}" hint-placeholder-val="{{ false }}">
         <div style="position: absolute; left: -24px; right: -24px; top: -8px; bottom: 0; background: rgba(20, 20, 20, 0.88); display: flex; align-items: flex-start; justify-content: center; padding-top: 14px; z-index: 50;">
@@ -91,7 +108,7 @@ button { font: inherit; }
       </sc-if>
 
       <sc-if value="{{ isRepos }}" hint-placeholder-val="{{ true }}">
-        <div style="display: flex; flex-direction: column;">
+        <div style="display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto;">
 
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 10px;">
             <div style="display: flex; align-items: center; gap: 16px; font-size: 10.5px; color: #8b8b8b;">
@@ -189,7 +206,7 @@ button { font: inherit; }
       </sc-if>
 
       <sc-if value="{{ isPlan }}" hint-placeholder-val="{{ false }}">
-        <div style="display: flex; flex-direction: column;">
+        <div style="display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto;">
 
           <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 0 10px 0;">
             <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Rollout sequence — fixed order, do not skip ahead</div>
@@ -206,26 +223,36 @@ button { font: inherit; }
 
           <sc-if value="{{ isPlanList }}" hint-placeholder-val="{{ true }}">
             <div class="cc-scrollx">
-            <div style="display: flex; flex-direction: column; min-width: 560px;">
-              <div style="display: flex; align-items: center; height: 16px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
-                <div style="width: 150px;">Repo</div>
-                <div style="width: 200px;">Task</div>
-                <div style="flex-grow: 1; min-width: 60px;">Depends on</div>
-                <div style="width: 50px;">Est</div>
-                <div style="width: 100px;">Status</div>
+            <!-- CSS table layout, same reasoning and same fix as the
+                 Findings tab above: a fixed-height flex row (height: 18px)
+                 doesn't clip or reflow overflowing content, it just paints
+                 it over the next row — which is exactly what happened here
+                 when the Status column's label wrapped to two lines
+                 without white-space: nowrap. That got a nowrap band-aid
+                 earlier; this replaces the whole fragile fixed-height row
+                 with real table sizing (each row's height genuinely fits
+                 its own content, per column, every time) instead of
+                 depending on every cell separately remembering not to wrap. -->
+            <div style="display: table; width: 100%; min-width: 560px; table-layout: fixed; border-collapse: collapse; border-bottom: 1px solid #2b2b2b;">
+              <div style="display: table-row; height: 16px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
+                <div style="display: table-cell; width: 150px;">Repo</div>
+                <div style="display: table-cell; width: 200px;">Task</div>
+                <div style="display: table-cell;">Depends on</div>
+                <div style="display: table-cell; width: 50px;">Est</div>
+                <div style="display: table-cell; width: 100px;">Status</div>
               </div>
 
               <sc-for list="{{ planRows }}" as="row" hint-placeholder-count="12">
-                <div class="cc-row" style="padding: 0; height: 18px; overflow: hidden; font-size: 11.5px;">
-                  <div class="cc-mono" style="width: 150px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #9d9d9d; font-size: 11px;">{{ row.repo }}</div>
-                  <div style="width: 200px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cccccc;">{{ row.task }}</div>
-                  <div style="flex-grow: 1; padding-right: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8b8b8b;">{{ row.deps }}</div>
-                  <div style="width: 50px; color: #9d9d9d;">{{ row.est }}</div>
-                  <div style="width: 100px; display: flex; align-items: center; gap: 7px; white-space: nowrap;"><span style="{{ row.dotStyle }}"></span><span style="{{ row.statusStyle }}">{{ row.statusLabel }}</span></div>
+                <div style="display: table-row; font-size: 11.5px; border-top: 1px solid #2b2b2b;">
+                  <div class="cc-mono" style="display: table-cell; vertical-align: middle; height: 18px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #9d9d9d; font-size: 11px;">{{ row.repo }}</div>
+                  <div style="display: table-cell; vertical-align: middle; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cccccc;">{{ row.task }}</div>
+                  <div style="display: table-cell; vertical-align: middle; padding-right: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8b8b8b;">{{ row.deps }}</div>
+                  <div style="display: table-cell; vertical-align: middle; color: #9d9d9d;">{{ row.est }}</div>
+                  <div style="display: table-cell; vertical-align: middle; white-space: nowrap;">
+                    <div style="display: flex; align-items: center; gap: 7px;"><span style="{{ row.dotStyle }}"></span><span style="{{ row.statusStyle }}">{{ row.statusLabel }}</span></div>
+                  </div>
                 </div>
               </sc-for>
-
-              <div style="border-top: 1px solid #2b2b2b;"></div>
             </div>
             </div>
           </sc-if>
@@ -282,7 +309,7 @@ button { font: inherit; }
       </sc-if>
 
       <sc-if value="{{ isFindings }}" hint-placeholder-val="{{ false }}">
-        <div style="display: flex; flex-direction: column;">
+        <div style="display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto;">
 
           <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 0 10px 0;">
             <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">{{ waitingLabel }}</div>
@@ -363,7 +390,7 @@ button { font: inherit; }
       </sc-if>
 
       <sc-if value="{{ isLog }}" hint-placeholder-val="{{ false }}">
-        <div style="display: flex; flex-direction: column;">
+        <div style="display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto;">
           <div style="display: flex; align-items: center; padding: 0 0 8px 0; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
             <div style="width: 70px;">When</div>
             <div style="width: 150px;">Repo</div>
