@@ -78,6 +78,36 @@ class RunnerClient {
 // notifyNewEscalations/tailLogsToOutputChannels), so the webview no longer
 // needs that data at all. The red status dot still reflects agent_status,
 // which is included.
+// Confirmed via live bisection, not guesswork: embedding this session's full
+// dispatch history (~18 dispatches, one repo's alone ~20K chars) in the
+// initial webview payload reliably crashed the dashboard on load — verified
+// by removing repos' dispatches one at a time and watching it start working
+// again once the total dropped low enough, then re-adding them one at a
+// time until it broke again. No content anomaly was found in the data that
+// broke it (checked for the classic script-tag-breaking Unicode gotchas,
+// stray <script> sequences, control characters — none present); it's
+// genuinely about total payload size, most plausibly at the VS Code/
+// Electron webview-host level (a large inline <script> blob taking long
+// enough to load that a second render pass — see syncFromDaemon's own
+// synchronous-claim fix — could still land badly), not a bug in this
+// codebase's own JS logic, which is why the code-level fixes made getting
+// to this diagnosis didn't resolve it on their own.
+//
+// This caps individual text fields rather than the total payload or
+// dispatch count — simpler, and sufficient for what's actually been
+// observed to trigger this. It does NOT cap unbounded growth from an
+// ever-increasing NUMBER of dispatches/findings/log lines over a very
+// long-running session; if that recurs, the real fix is windowing (embed
+// only the N most recent in full) with on-demand fetch for older ones, not
+// a bigger per-item cap.
+const MAX_EMBED_TEXT_CHARS = 4000;
+function truncateForEmbed(s: string | null | undefined): string {
+  if (!s) return s ?? "";
+  if (s.length <= MAX_EMBED_TEXT_CHARS) return s;
+  const omitted = s.length - MAX_EMBED_TEXT_CHARS;
+  return s.slice(0, MAX_EMBED_TEXT_CHARS) + `\n\n[… ${omitted} more characters omitted to keep the dashboard payload a safe size]`;
+}
+
 function toBootstrap(snapshot: any) {
   const repos = snapshot.repos.map((r: any) => ({
     id: r.id,
@@ -88,10 +118,10 @@ function toBootstrap(snapshot: any) {
     paused: !!r.paused,
     dispatches: r.dispatches.map((d: any) => ({
       id: d.id,
-      text: d.text,
+      text: truncateForEmbed(d.text),
       state: d.state,
       at: d.at,
-      response: d.response,
+      response: truncateForEmbed(d.response),
     })),
   }));
 
@@ -101,7 +131,7 @@ function toBootstrap(snapshot: any) {
   const items = snapshot.findings.map((f: any) => ({
     id: f.id,
     repo: repoNameById[f.repo_id] || f.repo_id,
-    text: f.text,
+    text: truncateForEmbed(f.text),
     phase: f.phase,
     disposition: f.disposition,
     by: f.by,
@@ -120,7 +150,7 @@ function toBootstrap(snapshot: any) {
     milestone: !!t.milestone,
   }));
 
-  const log = (snapshot.log || []).map((e: any) => ({ when: e.when, repo: e.repo, text: e.text }));
+  const log = (snapshot.log || []).map((e: any) => ({ when: e.when, repo: e.repo, text: truncateForEmbed(e.text) }));
 
   return {
     repos,
@@ -616,11 +646,27 @@ function renderDashboardHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, boo
 
   const bootstrapScript = `<script>window.__CC_BOOTSTRAP__ = ${JSON.stringify(bootstrap).replace(/</g, "\\u003c")};</script>`;
 
+  // The root cause of a crash chased at length: String.prototype.replace()'s
+  // SECOND argument, even with a plain-string first argument (not a regex),
+  // still interprets special "$" patterns in the replacement text — $&, $`,
+  // $', $$, etc. bootstrapScript is built from real dispatch/finding text a
+  // repo agent wrote, which can legitimately contain any of these — e.g. a
+  // regex code snippet ending in `'$')` contains the literal two-character
+  // sequence $', which means "insert everything after the match" to
+  // replace(). That silently spliced this file's OWN </head><body>...
+  // markup into the middle of the JSON payload, corrupting it into invalid
+  // JS a few thousand characters later and crashing the dashboard on load
+  // with no indication why — confirmed by bisecting the live data down to
+  // the exact dispatch, then isolating it to this exact mechanism with a
+  // minimal repro. A function replacer's return value is inserted
+  // verbatim, with no special-pattern interpretation of any kind — use one
+  // for ANY replacement value that isn't a fixed literal, not just this one,
+  // since the next arbitrary text embedded here would hit the same trap.
   return raw
-    .replace("{{REACT_URI}}", uri("vendor/react.js"))
-    .replace("{{REACT_DOM_URI}}", uri("vendor/react-dom.js"))
-    .replace("{{SUPPORT_URI}}", uri("support.js"))
-    .replace("</head>", `${bootstrapScript}\n</head>`);
+    .replace("{{REACT_URI}}", () => uri("vendor/react.js"))
+    .replace("{{REACT_DOM_URI}}", () => uri("vendor/react-dom.js"))
+    .replace("{{SUPPORT_URI}}", () => uri("support.js"))
+    .replace("</head>", () => `${bootstrapScript}\n</head>`);
 }
 
 export function deactivate() {}
