@@ -35,6 +35,19 @@
   var vscodeApi = window.__ccVsCodeApi || (typeof acquireVsCodeApi === 'function'
     ? (window.__ccVsCodeApi = acquireVsCodeApi())
     : null);
+  // Standing debug channel, not scaffolding — the extension side
+  // (extension.ts's clientLog handler) always has its own Output channel
+  // for this, on purpose: a webview's own devtools console is genuinely
+  // hard to reach (nested, cross-origin iframes) compared to just reading
+  // an Output panel. Exposed on window so support.js's own instrumentation
+  // (hand-patched, see its file header) can call it too. Individual call
+  // sites using this (e.g. the Mt()/c() render-count instrumentation added
+  // while chasing the useState-null crash) can still be investigation-
+  // specific and removed once no longer useful — it's this plumbing itself
+  // that's meant to stay.
+  window.__ccLog = function (detail) {
+    try { if (vscodeApi) vscodeApi.postMessage({ type: 'clientLog', detail: String(detail) }); } catch (e) { /* best effort */ }
+  };
   function reportHome(detail) {
     if (!vscodeApi) return;
     try { vscodeApi.postMessage({ type: 'clientError', detail: detail }); } catch (e) { /* best effort */ }
@@ -539,11 +552,19 @@ class Component extends DCLogic {
     // resetting whatever tab/menu/drawer/scroll state is currently open.
     this.handleHostMessage = this.handleHostMessage.bind(this);
     window.addEventListener('message', this.handleHostMessage);
+    // Temporary debug instrumentation — see window.__ccLog's own comment.
+    if (window.__ccLog) {
+      window.__ccLog('Component constructed, t=' + Date.now());
+      document.addEventListener('visibilitychange', function () {
+        window.__ccLog('visibilitychange -> ' + document.visibilityState + ', t=' + Date.now());
+      });
+    }
   }
 
   handleHostMessage(event) {
     var msg = event.data;
     if (!msg || msg.type !== 'snapshot') { return; }
+    if (window.__ccLog) window.__ccLog('snapshot message received, t=' + Date.now());
     var data = msg.data || {};
     this.setState({
       repos: data.repos || [],

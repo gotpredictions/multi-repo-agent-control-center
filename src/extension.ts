@@ -419,18 +419,25 @@ export function activate(context: vscode.ExtensionContext) {
             break;
           }
           case "clientError":
-            // Sent by dashboard.html's own top-level window.onerror/
-            // unhandledrejection handler — the one thing that's supposed to
-            // fire even when the rest of the page crashed on load. This
-            // exists because getting a real error out of a webview's own
-            // devtools console turned out to be genuinely hard in practice
-            // (nested, cross-origin iframes that plain `document.scripts`
-            // inspection from the workbench console can't reach) — this
-            // sidesteps all of that by reusing the same postMessage channel
-            // every other webview action already goes through, straight
-            // into this extension's own Output channel instead.
-            out.appendLine(`[webview error] ${msg.detail}`);
-            out.show(true);
+          case "clientLog":
+            // Standing capability, not scaffolding to rip out later: the
+            // webview reports its own errors (window.onerror /
+            // unhandledrejection — the one thing that's supposed to fire
+            // even when the rest of the page crashed on load) and,
+            // opt-in, its own debug logs, over the same postMessage
+            // channel every other webview action already uses, straight
+            // into this extension's own Output channel. This exists
+            // because getting anything out of a webview's own devtools
+            // console turned out to be genuinely hard in practice — nested,
+            // cross-origin iframes that plain `document.scripts`
+            // inspection from the workbench console can't reach, and even
+            // the webview-specific devtools command didn't land in the
+            // expected context. An Output channel is a much smaller thing
+            // to reason about than "go find the right devtools frame," and
+            // fits how this whole extension is meant to work: read the
+            // Output panel, not reverse-engineer a nested iframe tree.
+            out.appendLine(`[webview ${msg.type === "clientError" ? "error" : "log"}] ${msg.detail}`);
+            if (msg.type === "clientError") out.show(true);
             break;
           default:
             out.appendLine(`unknown webview message: ${JSON.stringify(msg)}`);
