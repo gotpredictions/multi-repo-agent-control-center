@@ -265,13 +265,17 @@ here) rather than assumed:
   package` started hard-erroring once the LICENSE/CONTRIBUTING links below were added to this
   README, since it couldn't resolve relative links without a real repo URL to rewrite them
   against).
-- ~~A `LICENSE` file~~ — done: [PolyForm Strict License 1.0.0](LICENSE), noncommercial use only,
-  Signed Off as licensor (see [CONTRIBUTING.md](CONTRIBUTING.md) for the separate
-  contribution/IP-assignment terms this needed on top of it, since PolyForm Strict alone doesn't
-  grant permission to modify the software at all, let alone contribute back). Not reviewed by
-  Signed Off's own legal counsel yet — see that file's own "Draft status" note. Worth checking
-  before a real Marketplace listing whether a noncommercial-only license needs anything extra
-  disclosed there; not verified either way.
+- ~~A `LICENSE` file~~ — done: [PolyForm Strict License 1.0.0](LICENSE), free for noncommercial
+  use, Signed Off as licensor. Commercial use isn't covered by this license at all — that's
+  intentional, not an oversight — a prefatory note in `LICENSE` points commercial users to open a
+  ticket at [signed-off.dev](https://signed-off.dev) to arrange a separate commercial license,
+  rather than trying to fold "sell commercial licenses" terms into the license text itself. Likely
+  to change (the user's own words) — treat this as a current snapshot, not settled. See
+  [CONTRIBUTING.md](CONTRIBUTING.md) for the separate contribution/IP-assignment terms this needed
+  on top of it, since PolyForm Strict alone doesn't grant permission to modify the software at all,
+  let alone contribute back. Not reviewed by Signed Off's own legal counsel yet — see that file's
+  own "Draft status" note. Worth checking before a real Marketplace listing whether a
+  noncommercial-only license needs anything extra disclosed there; not verified either way.
 - An icon and a `.vscodeignore` (packaging currently ships raw `node_modules` wholesale — 4700+
   files — rather than trimming dev-only cruft).
 - The real blocker, not just a nuisance: the Agent SDK's bundled native binary is platform-specific
