@@ -139,8 +139,20 @@ export function activate(context: vscode.ExtensionContext) {
   const out = vscode.window.createOutputChannel("Agent Control Center");
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
   const serverScript = path.join(context.extensionUri.fsPath, "out", "server.js");
+  const mcpServerScript = path.join(context.extensionUri.fsPath, "out", "mcpServer.js");
   const dbPath = path.join(context.globalStorageUri.fsPath, "control-center.db");
   out.appendLine(`DB: ${dbPath}`);
+  out.appendLine(`To register the MCP server: claude mcp add --scope project control-center -- node ${mcpServerScript}`);
+
+  // Shown once per install of this extension (globalState survives
+  // updates but not uninstall/reinstall) — not added to any user- or
+  // project-level config on your behalf; this just opens the walkthrough
+  // that tells you how, if you want it.
+  const WALKTHROUGH_SHOWN_KEY = "walkthroughShown";
+  if (!context.globalState.get(WALKTHROUGH_SHOWN_KEY)) {
+    context.globalState.update(WALKTHROUGH_SHOWN_KEY, true);
+    vscode.commands.executeCommand("workbench.action.openWalkthrough", `${context.extension.id}#gettingStarted`, false);
+  }
 
   let panel: vscode.WebviewPanel | undefined;
 

@@ -2,7 +2,7 @@
   "name": "multi-repo-agent-control-center",
   "displayName": "Multi-Repo Agent Control Center",
   "description": "Local dashboard for coordinating coding-agent sessions across multiple repos.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "local-dev",
   "private": true,
   "repository": {
@@ -34,6 +34,34 @@
       {
         "command": "multiRepoAgentControlCenter.resetAllData",
         "title": "Agent Control Center: Reset All Data"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "gettingStarted",
+        "title": "Agent Control Center",
+        "description": "Get the dashboard and the MCP server both running.",
+        "steps": [
+          {
+            "id": "openDashboard",
+            "title": "Open the dashboard",
+            "description": "See what's tracked and populate it — no repo list ships with this extension.",
+            "media": { "markdown": "walkthrough/open-dashboard.md" },
+            "completionEvents": ["onCommand:multiRepoAgentControlCenter.openDashboard"]
+          },
+          {
+            "id": "registerMcp",
+            "title": "Register the MCP server",
+            "description": "Let a Claude Code session dispatch to repos and resolve escalations directly.",
+            "media": { "markdown": "walkthrough/register-mcp.md" }
+          },
+          {
+            "id": "readDocs",
+            "title": "Read the rest",
+            "description": "Dispatches, escalations, and findings are three different things — worth knowing before you use any of them.",
+            "media": { "markdown": "walkthrough/read-docs.md" }
+          }
+        ]
       }
     ]
   },
