@@ -93,7 +93,15 @@ button { font: inherit; }
       <sc-if value="{{ isRepos }}" hint-placeholder-val="{{ true }}">
         <div style="display: flex; flex-direction: column;">
 
-          <div style="display: flex; align-items: center; justify-content: flex-end; padding-bottom: 8px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 16px; font-size: 10.5px; color: #8b8b8b;">
+              <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #89d185;"></span>running</span>
+              <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #6e6e6e;"></span>idle</span>
+              <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f14c4c;"></span>needs human</span>
+              <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1px solid #6e6e6e;"></span>stopped</span>
+              <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #6e6e6e; box-shadow: 0 0 0 2px #6b551c;"></span>dispatches paused</span>
+              <span>click a dot for start · stop · watch</span>
+            </div>
             <button type="button" style="{{ dispatchAllBtnStyle }}" onClick="{{ dispatchToAll }}">Dispatch to all queues</button>
           </div>
 
@@ -176,15 +184,6 @@ button { font: inherit; }
 
           <div style="border-top: 1px solid #2b2b2b;"></div>
           </div>
-          </div>
-
-          <div style="display: flex; align-items: center; gap: 16px; padding: 10px 0 0 30px; font-size: 10.5px; color: #8b8b8b;">
-            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #89d185;"></span>running</span>
-            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #6e6e6e;"></span>idle</span>
-            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f14c4c;"></span>needs human</span>
-            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1px solid #6e6e6e;"></span>stopped</span>
-            <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #6e6e6e; box-shadow: 0 0 0 2px #6b551c;"></span>dispatches paused</span>
-            <span>click a dot for start · stop · watch</span>
           </div>
         </div>
       </sc-if>
