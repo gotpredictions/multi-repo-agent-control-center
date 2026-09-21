@@ -21,10 +21,63 @@
 // signal that it can't continue, not on us to guess from prose.
 import { Db, Repo, Dispatch, EscalationOption, EscalationKind } from "./db";
 import { z } from "zod";
+import * as path from "node:path";
+import * as fs from "node:fs";
 
 type CanUseToolResult =
   | { behavior: "allow"; updatedInput: Record<string, unknown> }
   | { behavior: "deny"; message: string };
+
+// Supplying canUseTool at all makes the SDK route EVERY tool call through
+// it, regardless of permissionMode — there is no "ask me only for the
+// risky stuff, auto-approve the rest" for free. Without judgment here,
+// "genuine escalation" became "escalate literally everything," which is
+// not autonomous execution, it's an agent that can't take a single step
+// unattended. This is where that judgment actually lives: auto-approve
+// safe/routine work, escalate only what's actually worth a human's
+// attention (outside the repo, or a short list of clearly destructive
+// bash patterns) — not exhaustive, but the common real cases.
+const ALWAYS_SAFE_TOOLS = new Set(["Read", "Glob", "Grep", "TodoWrite", "WebFetch", "WebSearch", "NotebookEdit"]);
+
+// path.resolve doesn't follow symlinks — on macOS, repo.cwd is
+// typically stored as /tmp/... or /Users/... while a tool call's actual
+// file_path can come back resolved through a symlinked ancestor
+// (/private/tmp/...), making a plain string comparison fail for a file
+// that's genuinely inside the repo. Walk up to the nearest existing
+// ancestor and realpath THAT (the target file itself may not exist yet
+// — Write is often creating it) before comparing.
+function realpathClosestExisting(p: string): string {
+  let cur = p;
+  for (;;) {
+    try {
+      return fs.realpathSync(cur);
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return cur;
+      cur = parent;
+    }
+  }
+}
+
+function isWithinCwd(filePath: unknown, cwd: string): boolean {
+  if (typeof filePath !== "string" || !filePath) return false;
+  const resolvedInput = path.resolve(cwd, filePath);
+  const realCwd = realpathClosestExisting(path.resolve(cwd));
+  const realInputAncestor = realpathClosestExisting(resolvedInput);
+  const root = realCwd + path.sep;
+  return realInputAncestor === realCwd || realInputAncestor.startsWith(root);
+}
+
+// Denies (well, escalates) obviously catastrophic patterns rather than
+// trying to allowlist "safe" commands — an allowlist would just
+// recreate the same friction this fix exists to remove. Not exhaustive;
+// a genuinely adversarial agent could work around this. It's a floor
+// against accidents, not a sandbox.
+const DANGEROUS_BASH = /\brm\s+-rf\s+(\/|~)(?!\S)|\bgit\s+push\s+.*--force\b|\bsudo\b|:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}/;
+
+function looksDangerous(command: unknown): boolean {
+  return typeof command === "string" && DANGEROUS_BASH.test(command);
+}
 
 const ESCALATION_POLL_MS = 1000;
 const ESCALATION_TIMEOUT_MS = 1000 * 60 * 60 * 12; // 12h — a human may be asleep, not gone.
@@ -94,6 +147,19 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
       toolName: string,
       input: Record<string, unknown>
     ): Promise<CanUseToolResult> => {
+      if (ALWAYS_SAFE_TOOLS.has(toolName)) {
+        return { behavior: "allow", updatedInput: input };
+      }
+      if ((toolName === "Write" || toolName === "Edit") && isWithinCwd(input.file_path, repo.cwd)) {
+        return { behavior: "allow", updatedInput: input };
+      }
+      if (toolName === "Bash" && !looksDangerous(input.command)) {
+        return { behavior: "allow", updatedInput: input };
+      }
+
+      // Everything else actually escalates: a Write/Edit outside the
+      // repo's own cwd, a Bash command matching the danger patterns, or
+      // any tool this list doesn't already know is routine.
       db.appendLog(repo.id, "ask", `permission needed — ${toolName}(${JSON.stringify(input).slice(0, 120)})`);
       const answer = await openAndAwait(
         "permission",
