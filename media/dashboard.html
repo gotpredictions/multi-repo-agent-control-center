@@ -48,9 +48,10 @@ button { font: inherit; }
       <sc-for list="{{ flow }}" as="step" hint-placeholder-count="5">
         <div style="display: flex; align-items: center; gap: 4px;">
           <span style="{{ step.sepStyle }}">›</span>
-          <button type="button" style="{{ step.style }}" onClick="{{ step.pick }}"><span style="{{ step.dotStyle }}"></span>{{ step.label }}</button>
+          <div style="{{ step.style }}"><span style="{{ step.dotStyle }}"></span>{{ step.label }}</div>
         </div>
       </sc-for>
+      <span style="{{ phaseNoteStyle }}">{{ phaseNote }}</span>
     </div>
 
     <div style="display: flex; align-items: flex-end; gap: 22px; border-bottom: 1px solid #2b2b2b;">
@@ -216,12 +217,12 @@ button { font: inherit; }
               </div>
 
               <sc-for list="{{ planRows }}" as="row" hint-placeholder-count="12">
-                <div class="cc-row" style="padding: 0; height: 18px; font-size: 11.5px;">
+                <div class="cc-row" style="padding: 0; height: 18px; overflow: hidden; font-size: 11.5px;">
                   <div class="cc-mono" style="width: 150px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #9d9d9d; font-size: 11px;">{{ row.repo }}</div>
                   <div style="width: 200px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cccccc;">{{ row.task }}</div>
                   <div style="flex-grow: 1; padding-right: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8b8b8b;">{{ row.deps }}</div>
                   <div style="width: 50px; color: #9d9d9d;">{{ row.est }}</div>
-                  <div style="width: 100px; display: flex; align-items: center; gap: 7px;"><span style="{{ row.dotStyle }}"></span><span style="{{ row.statusStyle }}">{{ row.statusLabel }}</span></div>
+                  <div style="width: 100px; display: flex; align-items: center; gap: 7px; white-space: nowrap;"><span style="{{ row.dotStyle }}"></span><span style="{{ row.statusStyle }}">{{ row.statusLabel }}</span></div>
                 </div>
               </sc-for>
 
@@ -391,7 +392,7 @@ class Component extends DCLogic {
     super(props);
     this.state = {
       tab: 'repos',
-      phase: 'implement',
+      requirementPhase: __bootstrap ? __bootstrap.requirementPhase : null,
       planView: 'list',
       showLinks: true,
       answering: null,
@@ -400,6 +401,7 @@ class Component extends DCLogic {
       newRepo: '',
       newText: '',
       menuFor: null,
+      menuRect: null,
       drawerFor: null,
       drawerMode: '',
       composerRepo: null,
@@ -432,14 +434,23 @@ class Component extends DCLogic {
       repos: data.repos || [],
       items: data.items || [],
       taskDefs: data.tasks || [],
-      log: data.log || []
+      log: data.log || [],
+      requirementPhase: data.requirementPhase || null
     });
   }
 
   renderVals() {
     var self = this;
     var tab = this.state.tab || 'repos';
-    var phase = this.state.phase || 'implement';
+    // Read-only, sourced from the real requirement phase (set only via the
+    // control-center MCP's set_requirement_phase — see mcpServer.ts). This
+    // used to be local clickable UI state with no backend behind it at
+    // all; now that a real coordinator-set value exists, a clickable
+    // version of the same five labels would directly contradict it
+    // ("coordinator-set only, not something you can click around" was the
+    // explicit requirement), so every click handler here is gone, not
+    // just hidden.
+    var phase = this.state.requirementPhase || null;
     var planView = this.state.planView || 'list';
     var showLinks = this.state.showLinks !== false;
 
@@ -450,15 +461,18 @@ class Component extends DCLogic {
       { id: 'closing', label: 'Closing' },
       { id: 'done', label: 'Done' }
     ];
-    var current = 0;
+    var current = -1;
     for (var i = 0; i < phaseDefs.length; i++) {
       if (phaseDefs[i].id === phase) { current = i; }
     }
-    var stepBase = 'display: flex; align-items: center; gap: 7px; padding: 4px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; ';
+    var stepBase = 'display: flex; align-items: center; gap: 7px; padding: 4px 12px; border-radius: 4px; font-size: 12px; ';
     var dotBase = 'width: 7px; height: 7px; border-radius: 50%; ';
     var flow = phaseDefs.map(function (p, i) {
       var skin, dot;
-      if (i < current) {
+      if (current === -1) {
+        skin = 'border: 1px solid #3c3c3c; background: transparent; color: #6e6e6e;';
+        dot = dotBase + 'border: 1px solid #4a4a4a;';
+      } else if (i < current) {
         skin = 'border: 1px solid #2f4a2f; background: #1c2a1c; color: #89d185;';
         dot = dotBase + 'background: #89d185;';
       } else if (i === current) {
@@ -474,8 +488,7 @@ class Component extends DCLogic {
         dotStyle: dot,
         sepStyle: i === 0
           ? 'display: none;'
-          : 'font-size: 15px; color: #5a5a5a; padding: 0 2px;',
-        pick: function () { self.setState({ phase: p.id }); }
+          : 'font-size: 15px; color: #5a5a5a; padding: 0 2px;'
       };
     });
 
@@ -574,6 +587,7 @@ class Component extends DCLogic {
 
     var repos = this.state.repos || [];
     var menuFor = this.state.menuFor;
+    var menuRect = this.state.menuRect || null;
     var drawerFor = this.state.drawerFor;
     var drawerMode = this.state.drawerMode || '';
     var composerRepo = this.state.composerRepo || null;
@@ -770,11 +784,36 @@ class Component extends DCLogic {
         dotStyle: 'display: block; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box; '
           + agentDots[r.agent] + (r.paused ? ' box-shadow: 0 0 0 2px #6b551c;' : ''),
         dotBtnStyle: 'display: flex; align-items: center; justify-content: center; width: 22px; height: 20px; padding: 0; border: none; background: none; cursor: pointer;',
-        toggleMenu: function () { self.setState({ menuFor: menuFor === r.id ? null : r.id }); },
-        closeMenu: function () { self.setState({ menuFor: null }); },
+        // position: fixed + a rect measured at click time, not
+        // position: absolute against the row. The row sits inside
+        // .cc-scrollx (overflow-x: auto for the wide table), and per the
+        // CSS overflow spec an unspecified overflow-y computes to 'auto'
+        // too whenever overflow-x isn't 'visible' — so that ancestor was
+        // silently clipping this popup's bottom the whole time. A fixed
+        // element's containing block is the viewport (no ancestor here
+        // sets transform/filter/perspective), so it escapes that clip
+        // regardless of which table row opened it.
+        toggleMenu: function (event) {
+          if (menuFor === r.id) { self.setState({ menuFor: null, menuRect: null }); return; }
+          var btn = event && event.currentTarget;
+          var rect = btn && btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
+          self.setState({
+            menuFor: r.id,
+            menuRect: rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : null
+          });
+        },
+        closeMenu: function () { self.setState({ menuFor: null, menuRect: null }); },
         menuOpen: menuFor === r.id,
-        menuStyle: 'position: absolute; left: 4px; ' + (i > 5 ? 'bottom: 22px;' : 'top: 22px;')
-          + ' min-width: 190px; padding: 4px 0; background: #252526; border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); z-index: 20;',
+        menuStyle: (function () {
+          var base = 'position: fixed; min-width: 190px; padding: 4px 0; background: #252526;'
+            + ' border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); z-index: 20;';
+          if (!menuRect) { return base + ' left: -9999px; top: -9999px;'; }
+          var openUp = (window.innerHeight - menuRect.top) < 180;
+          var pos = openUp
+            ? ('bottom: ' + Math.max(4, window.innerHeight - menuRect.bottom) + 'px;')
+            : ('top: ' + (menuRect.top + 2) + 'px;');
+          return base + ' left: ' + menuRect.left + 'px; ' + pos;
+        })(),
         menuItems: menuItems.map(function (m) { return { label: m.label, style: menuItemStyle, pick: m.pick }; }),
 
         queueLabel: r.dispatches.length === 0
@@ -882,6 +921,8 @@ class Component extends DCLogic {
 
     return {
       flow: flow,
+      phaseNote: current === -1 ? '(not set — coordinator calls set_requirement_phase)' : '',
+      phaseNoteStyle: 'font-size: 11px; color: #6e6e6e; font-style: italic;',
       tabs: tabs,
       isPlan: tab === 'plan',
       isRepos: tab === 'repos',
@@ -956,12 +997,13 @@ class Component extends DCLogic {
         var text = (self.state.newText || '').trim();
         if (!text) { self.setState({ adding: false }); return; }
         var repo = (self.state.newRepo || '').trim() || 'coordinator';
-        notifyHost({ type: 'addFinding', repoId: repo, text: text, phase: phaseDefs[current].label });
+        var currentPhaseLabel = current >= 0 ? phaseDefs[current].label : '';
+        notifyHost({ type: 'addFinding', repoId: repo, text: text, phase: currentPhaseLabel });
         var next = items.concat([{
           id: 'u' + items.length + '-' + text.length,
           repo: repo,
           text: text,
-          phase: phaseDefs[current].label,
+          phase: currentPhaseLabel,
           disposition: 'Triage — not yet assessed',
           by: 'human',
           sev: 'watch',

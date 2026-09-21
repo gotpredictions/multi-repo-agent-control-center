@@ -104,6 +104,37 @@ looking for the source of truth on what each gate requires). Single-slot by desi
 in flight at a time as tracked here, not a queue of many; starting a new one means explicitly
 resetting the phase back to `critique`, since it doesn't reset itself.
 
+**The header phase stepper is read-only.** It shows `requirementPhase` from the `meta` table
+(via `db.snapshot()` → `extension.ts`'s `toBootstrap()` → the webview bootstrap/postMessage
+payload) and has no click handlers at all — it predates `get_requirement_phase`/
+`set_requirement_phase` (it was the original mockup's decoration, built before either existed) and
+was still clickable and locally-stateful until this was wired up; fixed so the only way it changes
+is a coordinator actually calling `set_requirement_phase`, matching the "not something we can click
+around" requirement above. Renders all steps dim/neutral when nothing has been set yet.
+
+**Two known layout-clipping bugs, now covered by `npm run check`.** Both had the same shape: a
+box's declared size didn't match what it could actually contain, and the overflow silently bled
+into a neighbor instead of erroring.
+- The repo-row dot menu (`Watch output` / `Stop agent` / …) used to be `position: absolute` against
+  its table row, which sits inside `.cc-scrollx` (`overflow-x: auto`, for the wide table on narrow
+  windows). Per the CSS overflow spec, leaving `overflow-y` unspecified while `overflow-x` is
+  anything but `visible` makes `overflow-y` compute to `auto` too — so that ancestor was silently
+  clipping the popup's bottom the whole time, cutting it down to one visible item. Fixed by
+  switching the popup to `position: fixed`, anchored to a rect measured from the button via
+  `getBoundingClientRect()` at click time — a fixed element's containing block is the viewport
+  (nothing here sets `transform`/`filter`/`perspective`), so it escapes that clip regardless of
+  which row opened it.
+- The Plan tab's list view gives each row a fixed `height: 18px` rather than `min-height`, so a
+  status label that wrapped to two lines (`Not started` didn't fit its 100px column without
+  `white-space: nowrap`) painted its second line over the next row instead of pushing it down or
+  being clipped — the Gantt view has no wrapping text columns, so it never showed this. Fixed with
+  `white-space: nowrap` on the status column plus `overflow: hidden` on the row itself as a
+  backstop against the same shape of bug recurring there.
+
+`scripts/check-dashboard-layout.js` statically asserts both fixes stay in place (parses
+`dashboard.html` for the specific style tokens each relies on) and runs as part of `npm run
+package`, so packaging a regression on either fails loudly instead of shipping quietly.
+
 ## Known limitations (v1, ad hoc)
 
 - "Dispatch now" vs "queue" both land as an ordinary FIFO-queued dispatch; there's no queue-jump

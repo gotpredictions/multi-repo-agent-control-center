@@ -122,7 +122,14 @@ function toBootstrap(snapshot: any) {
 
   const log = (snapshot.log || []).map((e: any) => ({ when: e.when, repo: e.repo, text: e.text }));
 
-  return { repos, items, tasks, log };
+  return {
+    repos,
+    items,
+    tasks,
+    log,
+    requirementPhase: snapshot.requirementPhase || null,
+    requirementTitle: snapshot.requirementTitle || null,
+  };
 }
 
 export function activate(context: vscode.ExtensionContext) {

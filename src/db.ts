@@ -122,6 +122,8 @@ export interface Snapshot {
   tasks: Task[];
   logs: Record<string, LogLine[]>;
   log: LogEntry[];
+  requirementPhase: string | null;
+  requirementTitle: string | null;
 }
 
 const SCHEMA = `
@@ -551,6 +553,8 @@ export class Db {
       tasks: this.listTasks(),
       logs,
       log: this.listLogEntries(),
+      requirementPhase: this.getMeta("requirement_phase"),
+      requirementTitle: this.getMeta("requirement_title"),
     };
   }
 
