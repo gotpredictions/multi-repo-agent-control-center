@@ -97,12 +97,11 @@ button { font: inherit; }
           </div>
 
           <div class="cc-scrollx">
-          <div style="min-width: 710px;">
+          <div style="min-width: 620px;">
           <div style="display: flex; align-items: center; height: 16px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
             <div style="width: 30px;">Agent</div>
             <div style="width: 230px;">Repo</div>
             <div style="width: 120px;">Phase</div>
-            <div style="width: 90px;">Stage</div>
             <div style="flex-grow: 1; min-width: 70px;">Pull requests</div>
             <div style="width: 170px;">Dispatch queue</div>
           </div>
@@ -116,7 +115,6 @@ button { font: inherit; }
                 </div>
                 <div class="cc-mono" style="width: 230px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.repo }}</div>
                 <div style="width: 120px; color: #9d9d9d;">{{ row.phase }}</div>
-                <div style="width: 90px;"><span style="{{ row.stageStyle }}">{{ row.stageLabel }}</span></div>
                 <div style="flex-grow: 1; padding-right: 10px; color: #9d9d9d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.prs }}</div>
                 <div style="width: 170px;">
                   <button type="button" style="{{ row.queueBtnStyle }}" onClick="{{ row.openDispatches }}">{{ row.queueLabel }}</button>
@@ -374,78 +372,11 @@ button { font: inherit; }
     </div>
 
   </div>
-  <sc-if value="{{ watchOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="height: 206px; box-sizing: border-box; border-top: 1px solid #2b2b2b; background: #181818; display: flex; flex-direction: column;">
-
-      <div style="display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 12px; border-bottom: 1px solid #2b2b2b;">
-        <div style="display: flex; align-items: center; gap: 10px; height: 30px;">
-          <span style="font-size: 10.5px; letter-spacing: 0.08em; color: #ffffff; border-bottom: 1px solid #0078d4; padding-bottom: 9px;">AGENT</span>
-          <span style="font-size: 10.5px; color: #6e6e6e;">replayed from the session stream — not the integrated terminal</span>
-        </div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <select aria-label="Output channel" value="{{ watchRepoId }}" onChange="{{ onChannel }}" style="{{ selectStyle }}">
-            <sc-for list="{{ channels }}" as="c" hint-placeholder-count="10">
-              <option value="{{ c.id }}">{{ c.label }}</option>
-            </sc-for>
-          </select>
-          <button type="button" aria-label="Close panel" style="{{ panelCloseStyle }}" onClick="{{ closeWatch }}">×</button>
-        </div>
-      </div>
-
-      <div style="flex-grow: 1; min-height: 0; overflow: hidden; padding: 6px 12px;">
-        <sc-for list="{{ watchLines }}" as="line" hint-placeholder-count="7">
-          <div class="cc-mono" style="display: flex; gap: 10px; font-size: 11.5px; line-height: 1.6;">
-            <span style="color: #5a5a5a; flex-shrink: 0;">{{ line.t }}</span>
-            <span style="{{ line.tagStyle }}">{{ line.tag }}</span>
-            <span style="{{ line.textStyle }}">{{ line.text }}</span>
-          </div>
-        </sc-for>
-      </div>
-
-      <sc-if value="{{ watchNeedsAnswer }}" hint-placeholder-val="{{ false }}">
-        <div style="border-top: 1px solid #2b2b2b; background: #1f1f1f; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
-
-          <div style="{{ escalationKindStyle }}">{{ escalationKindLabel }}</div>
-          <div style="font-size: 11.5px; line-height: 1.5; color: #cccccc;">{{ escalationPrompt }}</div>
-
-          <sc-for list="{{ escalationOptions }}" as="opt" hint-placeholder-count="4">
-            <button type="button" style="{{ opt.rowStyle }}" onClick="{{ opt.pick }}">
-              <span class="cc-mono" style="{{ opt.numStyle }}">{{ opt.num }}</span>
-              <span style="display: flex; flex-direction: column; gap: 2px; text-align: left;">
-                <span style="{{ opt.labelStyle }}">{{ opt.label }}</span>
-                <span style="{{ opt.rationaleStyle }}">{{ opt.rationale }}</span>
-              </span>
-            </button>
-          </sc-for>
-
-          <sc-if value="{{ escalationTyping }}" hint-placeholder-val="{{ false }}">
-            <div style="display: flex; align-items: center; gap: 8px; padding-top: 2px;">
-              <span class="cc-mono" style="color: #89d185; font-size: 12px;">›</span>
-              <input type="text" aria-label="Reply to the agent" placeholder="Type a decision not covered above" value="{{ escalationTypeText }}" onChange="{{ onEscalationType }}" style="{{ terminalInputStyle }}">
-              <button type="button" style="{{ saveBtnStyle }}" onClick="{{ sendEscalationType }}">Send</button>
-            </div>
-          </sc-if>
-          <sc-if value="{{ escalationNotTyping }}" hint-placeholder-val="{{ true }}">
-            <button type="button" style="{{ typeRowStyle }}" onClick="{{ openEscalationType }}">
-              <span class="cc-mono" style="{{ typeNumStyle }}">5</span>
-              <span style="{{ typeLabelStyle }}">Type something…</span>
-            </button>
-          </sc-if>
-
-          <div style="border-top: 1px solid #2b2b2b; margin-top: 2px; padding-top: 8px; display: flex; align-items: center; justify-content: space-between;">
-            <button type="button" style="{{ chatBtnStyle }}" onClick="{{ chatAboutThis }}">Chat about this — discuss before deciding</button>
-            <span style="font-size: 10.5px; color: #6e6e6e;">requested by {{ escalationAskedBy }}</span>
-          </div>
-
-          <sc-if value="{{ escalationHasPeerNote }}" hint-placeholder-val="{{ false }}">
-            <div class="cc-mono" style="font-size: 11px; color: #8b8b8b; font-style: italic; padding-top: 2px;">{{ escalationPeerNote }}</div>
-          </sc-if>
-
-        </div>
-      </sc-if>
-
-    </div>
-  </sc-if>
+  <!-- The old bottom Watch panel (log stream + escalation-answering UI)
+       moved to native VS Code UI: per-repo OutputChannel for the log
+       stream, showQuickPick/showInputBox for escalation answers
+       (see extension.ts's tailLogsToOutputChannels/answerEscalation).
+       Nothing left here pretending to be VS Code chrome. -->
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":960,"height":640}}'>
@@ -474,15 +405,11 @@ class Component extends DCLogic {
       composerRepo: null,
       composerDispatch: null,
       composerText: '',
-      watchRepo: null,
-      escalationTyping: false,
-      escalationTypeText: '',
       // No fallback canned data — opening this file without a real
       // extension-injected window.__CC_BOOTSTRAP__ (e.g. previewing the
       // raw HTML in a browser) now just shows a genuinely empty dashboard,
       // not a fake initiative.
       taskDefs: __bootstrap ? __bootstrap.tasks : [],
-      logs: __bootstrap ? __bootstrap.logs : {},
       repos: __bootstrap ? __bootstrap.repos : [],
       items: __bootstrap ? __bootstrap.items : [],
       log: __bootstrap ? __bootstrap.log : []
@@ -505,7 +432,6 @@ class Component extends DCLogic {
       repos: data.repos || [],
       items: data.items || [],
       taskDefs: data.tasks || [],
-      logs: data.logs || {},
       log: data.log || []
     });
   }
@@ -664,98 +590,11 @@ class Component extends DCLogic {
     var composerEditable = !!composerItem && composerItem.state === 'queued';
     var composerResponse = composerItem ? composerItem.response : '';
 
-    var watchRepo = this.state.watchRepo || null;
-    var watchObj = null;
-    repos.forEach(function (r) { if (r.id === watchRepo) { watchObj = r; } });
-    var logs = this.state.logs || {};
-
     function clock() {
       var d = new Date();
       function pad(n) { return (n < 10 ? '0' : '') + n; }
       return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
-
-    var tagColors = {
-      info: '#9d9d9d', read: '#4daafc', bash: '#c586c0', out: '#cccccc',
-      warn: '#d7ba7d', ask: '#f48771', you: '#89d185', idle: '#6e6e6e'
-    };
-    var idleLines = {
-      running: [{ t: clock(), tag: 'info', text: 'streaming — nothing buffered yet' }],
-      idle: [{ t: clock(), tag: 'idle', text: 'agent idle — no output since the last dispatch' }],
-      stopped: [{ t: clock(), tag: 'idle', text: 'session stopped — start the agent to attach' }],
-      needsHuman: [{ t: clock(), tag: 'ask', text: 'waiting on a human' }]
-    };
-    var watchLines = [];
-    if (watchObj) {
-      var raw = logs[watchObj.id] && logs[watchObj.id].length ? logs[watchObj.id] : idleLines[watchObj.agent];
-      watchLines = raw.slice(-7).map(function (l) {
-        return {
-          t: l.t,
-          tag: l.tag,
-          tagStyle: 'width: 34px; flex-shrink: 0; color: ' + (tagColors[l.tag] || '#9d9d9d') + ';',
-          textStyle: 'color: ' + (l.tag === 'ask' ? '#f48771' : (l.tag === 'you' ? '#89d185' : '#cccccc'))
-            + '; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'
-        };
-      }).map(function (l, i) {
-        l.text = raw.slice(-7)[i].text;
-        return l;
-      });
-    }
-
-    function assign(obj, patch) {
-      var copy = {};
-      Object.keys(obj).forEach(function (k) { copy[k] = obj[k]; });
-      Object.keys(patch).forEach(function (k) { copy[k] = patch[k]; });
-      return copy;
-    }
-
-    var escalationQuestion = null;
-    if (watchObj && watchObj.agent === 'needsHuman') {
-      (watchObj.questions || []).forEach(function (q) {
-        if (!escalationQuestion && !q.answer) { escalationQuestion = q; }
-      });
-    }
-    var escalationTyping = this.state.escalationTyping === true;
-    var escalationTypeText = this.state.escalationTypeText || '';
-
-    function resolveEscalation(choiceLabel) {
-      if (!watchObj || !escalationQuestion) { return; }
-      notifyHost({ type: 'resolveEscalation', escalationId: escalationQuestion.id, answer: choiceLabel });
-      var stamp = clock();
-      var nextLogs = {};
-      Object.keys(logs).forEach(function (k) { nextLogs[k] = logs[k]; });
-      nextLogs[watchObj.id] = (logs[watchObj.id] || []).concat([
-        { t: stamp, tag: 'you', text: choiceLabel },
-        { t: stamp, tag: 'info', text: 'decision received — resuming' }
-      ]);
-      var qId = escalationQuestion.id;
-      self.setState({
-        logs: nextLogs,
-        escalationTyping: false,
-        escalationTypeText: '',
-        repos: patchRepo(watchObj.id, function (c) {
-          c.agent = 'running';
-          c.questions = (c.questions || []).map(function (q) {
-            return q.id === qId ? assign(q, { answer: choiceLabel }) : q;
-          });
-        })
-      });
-    }
-
-    var escalationOptStyle = 'display: flex; align-items: flex-start; gap: 10px; width: 100%; box-sizing: border-box; padding: 4px 6px; border: none; border-radius: 3px; background: none; text-align: left; cursor: pointer;';
-    var escalationNumStyle = 'width: 16px; flex-shrink: 0; padding-top: 1px; font-size: 11px; color: #6e6e6e;';
-    var escalationOptions = escalationQuestion ? escalationQuestion.options.map(function (opt, i) {
-      return {
-        num: i + 1,
-        numStyle: escalationNumStyle,
-        rowStyle: escalationOptStyle,
-        labelStyle: 'font-size: 12px; color: #ffffff; font-weight: 600;',
-        rationaleStyle: 'font-size: 11px; color: #8b8b8b; line-height: 1.4;',
-        label: opt.label,
-        rationale: opt.rationale,
-        pick: function () { resolveEscalation(opt.label); }
-      };
-    }) : [];
 
     function closeComposer() {
       self.setState({ composerRepo: null, composerDispatch: null, composerText: '', composerScope: '' });
@@ -767,8 +606,6 @@ class Component extends DCLogic {
       // daemon's real markDispatchSent() sets the authoritative 'at'
       // on the next re-render.
       var stamp = clock();
-      var nextLogs = {};
-      Object.keys(logs).forEach(function (k) { nextLogs[k] = logs[k]; });
       var nextRepos = repos.map(function (r) {
         if (targets.indexOf(r.id) === -1) { return r; }
         var copy = {};
@@ -792,15 +629,9 @@ class Component extends DCLogic {
             response: ''
           }]);
         }
-        nextLogs[r.id] = (nextLogs[r.id] || []).concat([{
-          t: clock(),
-          tag: 'info',
-          text: (target && target.state === 'sent' ? 're-dispatched — ' : 'dispatched ahead of the queue — ')
-            + body.split('\n')[0].slice(0, 54)
-        }]);
         return copy;
       });
-      return { repos: nextRepos, logs: nextLogs };
+      return { repos: nextRepos };
     }
 
     function commitComposer(now) {
@@ -819,14 +650,12 @@ class Component extends DCLogic {
         var sent = dispatchNow(targets, composerAll ? null : composerDispatch, text);
         self.setState({
           repos: sent.repos,
-          logs: sent.logs,
           composerRepo: null,
           composerDispatch: null,
           composerText: '',
           composerScope: '',
           drawerFor: composerAll ? null : composerRepo,
-          drawerMode: composerAll ? '' : 'dispatches',
-          watchRepo: composerAll ? self.state.watchRepo : composerRepo
+          drawerMode: composerAll ? '' : 'dispatches'
         });
         return;
       }
@@ -884,12 +713,6 @@ class Component extends DCLogic {
       needsHuman: 'background: #f14c4c;',
       stopped: 'border: 1px solid #6e6e6e;'
     };
-    // The requirement's own lifecycle (critique -> plan -> implement ->
-    // close -> done), distinct from the agent dot above (is it running
-    // right now). Set via set_repo_stage, not derived from agent_status.
-    var stageLabels = { critique: 'Critique', plan: 'Plan', implement: 'Implement', close: 'Close', done: 'Done' };
-    var stageColors = { critique: '#9d9d9d', plan: '#4daafc', implement: '#d7ba7d', close: '#c586c0', done: '#89d185' };
-    var stageBase = 'display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 9px; font-size: 10.5px; border: 1px solid currentColor; ';
     var menuItemStyle = 'display: block; width: 100%; box-sizing: border-box; text-align: left; padding: 5px 12px; border: none; background: none; color: #cccccc; font-size: 11.5px; cursor: pointer;';
     var smallGhost = 'padding: 2px 8px; border-radius: 3px; font-size: 11px; cursor: pointer; ';
 
@@ -906,8 +729,11 @@ class Component extends DCLogic {
         });
       } else {
         menuItems.push({
-          label: r.agent === 'needsHuman' ? 'Watch — answer the question' : 'Watch output',
-          pick: function () { self.setState({ watchRepo: r.id, menuFor: null, escalationTyping: false, escalationTypeText: '' }); }
+          label: r.agent === 'needsHuman' ? 'Answer the question…' : 'Watch output',
+          pick: function () {
+            notifyHost({ type: r.agent === 'needsHuman' ? 'answerEscalation' : 'watchOutput', repoId: r.id });
+            self.setState({ menuFor: null });
+          }
         });
         menuItems.push({
           label: 'Stop agent',
@@ -940,8 +766,6 @@ class Component extends DCLogic {
       return {
         repo: r.repo,
         phase: r.phase,
-        stageLabel: stageLabels[r.stage] || r.stage || 'Critique',
-        stageStyle: stageBase + 'color: ' + (stageColors[r.stage] || stageColors.critique) + ';',
         prs: r.prs,
         dotStyle: 'display: block; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box; '
           + agentDots[r.agent] + (r.paused ? ' box-shadow: 0 0 0 2px #6b551c;' : ''),
@@ -987,7 +811,7 @@ class Component extends DCLogic {
             sendNow: function () {
               notifyHost({ type: 'dispatch', repoId: r.id, text: d.text });
               var out = dispatchNow([r.id], d.id, null);
-              self.setState({ repos: out.repos, logs: out.logs, watchRepo: r.id, menuFor: null });
+              self.setState({ repos: out.repos, menuFor: null });
             },
             nowLabel: sent ? 'Re-dispatch' : 'Dispatch now'
           };
@@ -1104,49 +928,6 @@ class Component extends DCLogic {
       composerQueue: function () { commitComposer(false); },
       composerNow: function () { commitComposer(true); },
 
-      watchOpen: !!watchObj,
-      watchRepoId: watchRepo || '',
-      channels: repos.map(function (r) { return { id: r.id, label: 'Control Center: ' + r.repo }; }),
-      onChannel: function (e) { self.setState({ watchRepo: e.target.value, answerText: '' }); },
-      closeWatch: function () { self.setState({ watchRepo: null }); },
-      watchLines: watchLines,
-      watchNeedsAnswer: !!watchObj && watchObj.agent === 'needsHuman',
-      selectStyle: 'height: 20px; max-width: 250px; padding: 0 6px; background: #313131; border: 1px solid #3c3c3c; border-radius: 3px; color: #cccccc; font-size: 11px;',
-      panelCloseStyle: 'width: 20px; height: 20px; padding: 0; border: none; background: none; color: #9d9d9d; font-size: 14px; cursor: pointer;',
-      terminalInputStyle: 'box-sizing: border-box; flex-grow: 1; height: 24px; padding: 0 8px; background: #1f1f1f; border: 1px solid #3c3c3c; border-radius: 3px; color: #cccccc; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px;',
-
-      escalationKindLabel: (escalationQuestion && escalationQuestion.kind === 'reply')
-        ? 'AWAITING REPLY — the agent paused mid-turn and needs your decision to continue'
-        : 'PERMISSION REQUIRED — a tool call is blocked until you decide',
-      escalationKindStyle: 'font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600; color: '
-        + ((escalationQuestion && escalationQuestion.kind === 'reply') ? '#d7ba7d;' : '#f48771;'),
-      escalationPrompt: escalationQuestion ? escalationQuestion.text : '',
-      escalationOptions: escalationOptions,
-      escalationAskedBy: escalationQuestion ? escalationQuestion.askedBy : '',
-      escalationHasPeerNote: !!(escalationQuestion && escalationQuestion.peerNote),
-      escalationPeerNote: escalationQuestion ? escalationQuestion.peerNote : '',
-      escalationTyping: escalationTyping,
-      escalationNotTyping: !escalationTyping,
-      escalationTypeText: escalationTypeText,
-      onEscalationType: function (e) { self.setState({ escalationTypeText: e.target.value }); },
-      openEscalationType: function () { self.setState({ escalationTyping: true }); },
-      sendEscalationType: function () {
-        var text = (self.state.escalationTypeText || '').trim();
-        if (!text) { return; }
-        resolveEscalation(text);
-      },
-      typeRowStyle: escalationOptStyle,
-      typeNumStyle: escalationNumStyle,
-      typeLabelStyle: 'font-size: 11.5px; color: #9d9d9d;',
-      // No real chat-thread backend yet (the daemon has no concept of a
-      // sub-conversation on an escalation) — for now this just opens the
-      // free-text box, so "discuss" becomes "say something that isn't one
-      // of the offered options" rather than a dead-end button.
-      chatAboutThis: function () {
-        if (!watchObj) { return; }
-        self.setState({ escalationTyping: true });
-      },
-      chatBtnStyle: smallGhost + 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;',
       nowBtnStyle: smallGhost + 'border: 1px solid #0f4a78; background: #12324a; color: #9cdcfe;',
       dispatchAllBtnStyle: 'padding: 4px 12px; border-radius: 3px; border: 1px solid #3c3c3c; background: transparent; color: #cccccc; font-size: 11.5px; cursor: pointer;',
 

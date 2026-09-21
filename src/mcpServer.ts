@@ -86,14 +86,20 @@ dashboard, and gets stale the moment reality diverges from what you
 said would happen. Update it with upsert_task as the plan itself
 changes, not just once at the start.
 
-Track each repo's stage with set_repo_stage as its requirement actually
-moves through critique → plan → implement → close → done — update it
-when the underlying reality changes (the critique held up, the plan is
-written, real implementation started, wrap-up began, it's actually
-done), not on a schedule and not just because the agent happens to be
-idle right now. This is separate from agent_status: a repo can sit idle
-mid-'implement' because more work is still queued, not because the
-requirement moved to a different stage.
+Critique → plan → implement → close → done is a requirement's own
+lifecycle, not a repo's — a single requirement often spans several
+repos at once, and a repo you're tracking will carry many different
+requirements over its lifetime, one after another. There's deliberately
+no per-repo "stage" field to set: that would only be right for the one
+requirement currently in flight there, and wrong the moment a second
+one starts or the first one finishes. The plan's own progress already
+has real, granular tracking — each task's status in upsert_task/
+get_tasks (todo/active/blocking/done) — so "is the plan done" is never
+a single field either, it's "are its tasks done." If you want a durable
+record of a requirement moving between these stages, log it with
+add_finding (scoped to the relevant repo, or 'coordinator' for
+something cross-cutting) rather than reaching for a status field that
+doesn't exist.
 
 Typical loop: list_repos to see what's tracked and its status → dispatch
 to hand a repo new work → list_open_escalations to see what's actually
@@ -351,21 +357,6 @@ server.tool(
       milestone: milestone ? 1 : 0,
     });
     return text(db.listTasks().find((t) => t.id === id));
-  }
-);
-
-server.tool(
-  "set_repo_stage",
-  "Update where this repo's requirement actually stands in its own lifecycle: 'critique' (validating the requirement itself — does it make sense, is it actually needed, before committing to a plan), 'plan' (an implementation plan exists and is current — see upsert_task), 'implement' (actively building against that plan), 'close' (implementation done, wrapping up — docs, review, merge), or 'done'. This is NOT agent_status (whether the agent is currently running right now) — a repo can be idle while its stage is still 'implement' because there's more queued work; update stage when the underlying reality changes, not when the agent happens to pause.",
-  {
-    repoId: z.string().describe("The repo's short id — see list_repos."),
-    stage: z.enum(["critique", "plan", "implement", "close", "done"]),
-  },
-  async ({ repoId, stage }) => {
-    const repo = db.getRepo(repoId);
-    if (!repo) return text({ error: `no such repo: ${repoId}` });
-    db.setRepoStage(repoId, stage);
-    return text(db.getRepo(repoId));
   }
 );
 

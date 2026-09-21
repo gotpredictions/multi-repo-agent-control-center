@@ -71,7 +71,13 @@ class RunnerClient {
 // Reshapes the daemon's snapshot (db.ts's Snapshot type) into exactly the
 // shape media/dashboard.html's mock data already used, so the webview needed
 // almost no restructuring — just reading window.__CC_BOOTSTRAP__ instead of
-// its hardcoded arrays.
+// its hardcoded arrays. Escalation detail (questions/options) and the raw
+// per-repo tagged logs are deliberately NOT included here anymore — the
+// escalation-answering UI and the log stream both moved to native VS Code
+// UI (QuickPick/InputBox and per-repo OutputChannels — see
+// notifyNewEscalations/tailLogsToOutputChannels), so the webview no longer
+// needs that data at all. The red status dot still reflects agent_status,
+// which is included.
 function toBootstrap(snapshot: any) {
   const repos = snapshot.repos.map((r: any) => ({
     id: r.id,
@@ -79,21 +85,7 @@ function toBootstrap(snapshot: any) {
     phase: r.phase,
     prs: r.prs,
     agent: r.agent_status,
-    stage: r.stage,
     paused: !!r.paused,
-    questions: r.escalation
-      ? [
-          {
-            id: r.escalation.id,
-            kind: r.escalation.kind,
-            text: r.escalation.text,
-            askedBy: r.escalation.asked_by,
-            options: r.escalation.options,
-            peerNote: r.escalation.peer_note,
-            answer: r.escalation.answer || "",
-          },
-        ]
-      : [],
     dispatches: r.dispatches.map((d: any) => ({
       id: d.id,
       text: d.text,
@@ -128,14 +120,9 @@ function toBootstrap(snapshot: any) {
     milestone: !!t.milestone,
   }));
 
-  const logs: Record<string, any[]> = {};
-  for (const [repoId, lines] of Object.entries(snapshot.logs)) {
-    logs[repoId] = (lines as any[]).map((l) => ({ t: l.t, tag: l.tag, text: l.text }));
-  }
-
   const log = (snapshot.log || []).map((e: any) => ({ when: e.when, repo: e.repo, text: e.text }));
 
-  return { repos, items, tasks, logs, log };
+  return { repos, items, tasks, log };
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -175,10 +162,106 @@ export function activate(context: vscode.ExtensionContext) {
   // and dashboard.html's Component merges it into state in place.
   let panelInitialized = false;
 
-  async function renderPanel() {
-    if (!panel) return;
+  // One real VS Code OutputChannel per repo for its tagged message stream
+  // (tool calls, results) — replacing the webview's old "Watch panel"
+  // mockup with the actual thing it was imitating. Created lazily so
+  // repos that never produce output don't clutter the Output dropdown.
+  const repoChannels = new Map<string, vscode.OutputChannel>();
+  // logs.id is an autoincrementing integer (db.ts) — tracks the highest
+  // one already written to each channel so a poll only appends genuinely
+  // new lines, not the whole recent-log window every time.
+  const lastLogId = new Map<string, number>();
+
+  function getRepoChannel(repoId: string, repoName: string): vscode.OutputChannel {
+    let ch = repoChannels.get(repoId);
+    if (!ch) {
+      ch = vscode.window.createOutputChannel(`Control Center: ${repoName}`);
+      repoChannels.set(repoId, ch);
+    }
+    return ch;
+  }
+
+  function tailLogsToOutputChannels(snapshot: any) {
+    for (const repo of snapshot.repos) {
+      const lines: any[] = snapshot.logs?.[repo.id] || [];
+      const since = lastLogId.get(repo.id) ?? 0;
+      const fresh = lines.filter((l) => l.id > since);
+      if (!fresh.length) continue;
+      const ch = getRepoChannel(repo.id, repo.repo);
+      for (const l of fresh) {
+        ch.appendLine(`${l.t}  [${l.tag}]  ${l.text}`);
+        lastLogId.set(repo.id, Math.max(lastLogId.get(repo.id) ?? 0, l.id));
+      }
+    }
+  }
+
+  // A permission gate or an ask_human reply-pause both land here (see
+  // agentRunner.ts) — notify once per escalation id (not once per poll,
+  // which would re-notify on every single DB change while the same
+  // escalation sits unanswered) with an action that opens the real
+  // answer flow.
+  const notifiedEscalations = new Set<string>();
+
+  function notifyNewEscalations(snapshot: any) {
+    for (const repo of snapshot.repos) {
+      const esc = repo.escalation;
+      if (!esc || repo.agent_status !== "needsHuman") continue;
+      if (notifiedEscalations.has(esc.id)) continue;
+      notifiedEscalations.add(esc.id);
+      const kindLabel = esc.kind === "reply" ? "needs a decision" : "needs a permission decision";
+      const summary = String(esc.text).split("\n")[0].slice(0, 100);
+      vscode.window.showWarningMessage(`${repo.repo} ${kindLabel}: ${summary}`, "Answer").then((choice) => {
+        if (choice === "Answer") answerEscalation(repo.id, esc);
+      });
+    }
+  }
+
+  // The native replacement for the webview's old escalation-answering
+  // panel: showQuickPick's {label, detail} is exactly the
+  // option-plus-rationale shape the agent already produces (see
+  // agentRunner.ts's genericOptionsFor / the ask_human tool), and
+  // showInputBox covers the free-text fallback. This IS the actual
+  // decision — picking here calls resolve_escalation directly, not a
+  // side channel pretending to.
+  async function answerEscalation(repoId: string, esc: any) {
+    type Item = vscode.QuickPickItem & { isTypeSomething?: boolean };
+    const items: Item[] = (esc.options || []).map((o: any) => ({
+      label: o.label,
+      detail: o.rationale || undefined,
+    }));
+    items.push({
+      label: "$(edit) Type something…",
+      detail: "Answer with something not covered above",
+      isTypeSomething: true,
+    });
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title:
+        (esc.kind === "reply" ? "Awaiting reply" : "Permission required") +
+        (esc.asked_by ? ` — requested by ${esc.asked_by}` : ""),
+      placeHolder: String(esc.text).split("\n")[0].slice(0, 200),
+      ignoreFocusOut: true,
+    });
+    if (!picked) return;
+
+    let answer: string | undefined = picked.label;
+    if (picked.isTypeSomething) {
+      answer = await vscode.window.showInputBox({ prompt: "Your answer", ignoreFocusOut: true });
+    }
+    if (!answer) return;
+    try {
+      await runner.call("resolveEscalation", { escalationId: esc.id, answer });
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to send answer: ${err?.message ?? err}`);
+    }
+  }
+
+  async function syncFromDaemon() {
     await runner.ready;
     const snapshot = await runner.call("snapshot");
+    tailLogsToOutputChannels(snapshot);
+    notifyNewEscalations(snapshot);
+    if (!panel) return;
     const bootstrap = toBootstrap(snapshot);
     if (!panelInitialized) {
       panel.webview.html = renderDashboardHtml(panel.webview, mediaRoot, bootstrap);
@@ -198,7 +281,7 @@ export function activate(context: vscode.ExtensionContext) {
   function spawnRunner(): RunnerClient {
     const r = new RunnerClient("node", serverScript, dbPath, out);
     r.onUpdate(() => {
-      renderPanel().catch((err) => out.appendLine(`render failed: ${err?.message ?? err}`));
+      syncFromDaemon().catch((err) => out.appendLine(`sync failed: ${err?.message ?? err}`));
     });
     return r;
   }
@@ -296,6 +379,18 @@ export function activate(context: vscode.ExtensionContext) {
           case "startAgent":
             await runner.call("startAgent", { repoId: msg.repoId });
             break;
+          case "watchOutput": {
+            const ch = repoChannels.get(msg.repoId);
+            if (ch) ch.show(true);
+            else vscode.window.showInformationMessage("No output yet for this repo.");
+            break;
+          }
+          case "answerEscalation": {
+            const snapshot = await runner.call("snapshot");
+            const repo = snapshot.repos.find((r: any) => r.id === msg.repoId);
+            if (repo?.escalation) await answerEscalation(msg.repoId, repo.escalation);
+            break;
+          }
           default:
             out.appendLine(`unknown webview message: ${JSON.stringify(msg)}`);
         }
@@ -312,14 +407,14 @@ export function activate(context: vscode.ExtensionContext) {
       // The daemon's own onChange event will trigger a re-render for
       // anything that actually wrote to the DB; no need to force one here.
     });
-    await renderPanel();
+    await syncFromDaemon();
   });
 
   async function restart() {
     out.appendLine("restarting runner \u2014 killing current daemon and spawning a fresh one");
     runner.dispose();
     runner = spawnRunner();
-    await renderPanel();
+    await syncFromDaemon();
   }
 
   const restartRunner = vscode.commands.registerCommand("multiRepoAgentControlCenter.restartRunner", async () => {
@@ -349,7 +444,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }
     runner = spawnRunner();
-    await renderPanel();
+    await syncFromDaemon();
     vscode.window.showInformationMessage("Agent Control Center data cleared.");
   });
 
@@ -438,6 +533,7 @@ export function activate(context: vscode.ExtensionContext) {
     copyMcpRegistrationCommand,
     createMcpJson,
     { dispose: () => runner.dispose() },
+    { dispose: () => repoChannels.forEach((ch) => ch.dispose()) },
     out
   );
 }

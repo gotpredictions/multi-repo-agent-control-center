@@ -2,7 +2,7 @@
   "name": "multi-repo-agent-control-center",
   "displayName": "Multi-Repo Agent Control Center",
   "description": "Local dashboard for coordinating coding-agent sessions across multiple repos.",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "publisher": "local-dev",
   "private": true,
   "repository": {

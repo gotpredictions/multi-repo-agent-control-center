@@ -18,12 +18,6 @@ export type DispatchState = "queued" | "sent";
 export type DispatchKind = "user" | "intro";
 export type FindingBy = "ai" | "wait" | "human";
 export type FindingSev = "open" | "watch" | "done";
-// The requirement's own lifecycle, distinct from agent_status (is the
-// agent currently working) and from the free-text `phase` label (whatever
-// the coordinator wants to call it, e.g. "Phase 2 - 2b"). 'critique' is the
-// default and deliberately comes before 'plan': requirements get validated
-// before a plan is written against them, not after.
-export type RepoStage = "critique" | "plan" | "implement" | "close" | "done";
 
 export interface Repo {
   id: string;
@@ -33,7 +27,6 @@ export interface Repo {
   prs: string;
   agent_status: AgentStatus;
   paused: 0 | 1;
-  stage: RepoStage;
   // Agent-authored self-introduction — what this repo is, stack, conventions,
   // current state — populated by an automatic 'intro' dispatch the first
   // time the repo is ever started, refreshable on demand after that. Empty
@@ -140,8 +133,7 @@ CREATE TABLE IF NOT EXISTS repos (
   prs TEXT NOT NULL DEFAULT '',
   agent_status TEXT NOT NULL DEFAULT 'stopped',
   paused INTEGER NOT NULL DEFAULT 0,
-  summary TEXT NOT NULL DEFAULT '',
-  stage TEXT NOT NULL DEFAULT 'critique'
+  summary TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS dispatches (
@@ -251,7 +243,6 @@ export class Db {
     ensureColumn("dispatches", "responded_at", "TEXT NOT NULL DEFAULT ''");
     ensureColumn("escalations", "kind", "TEXT NOT NULL DEFAULT 'permission'");
     ensureColumn("repos", "summary", "TEXT NOT NULL DEFAULT ''");
-    ensureColumn("repos", "stage", "TEXT NOT NULL DEFAULT 'critique'");
   }
 
   onChange(cb: () => void) {
@@ -264,11 +255,11 @@ export class Db {
 
   // ---- repos ----
 
-  upsertRepo(r: Omit<Repo, "paused" | "summary" | "stage"> & { paused?: boolean }) {
+  upsertRepo(r: Omit<Repo, "paused" | "summary"> & { paused?: boolean }) {
     this.conn
       .prepare(
-        `INSERT INTO repos (id, repo, cwd, phase, prs, agent_status, paused, summary, stage)
-         VALUES (?, ?, ?, ?, ?, ?, ?, '', 'critique')
+        `INSERT INTO repos (id, repo, cwd, phase, prs, agent_status, paused, summary)
+         VALUES (?, ?, ?, ?, ?, ?, ?, '')
          ON CONFLICT(id) DO UPDATE SET repo=excluded.repo, cwd=excluded.cwd,
            phase=excluded.phase, prs=excluded.prs`
       )
@@ -278,11 +269,6 @@ export class Db {
 
   setRepoSummary(id: string, summary: string) {
     this.conn.prepare(`UPDATE repos SET summary = ? WHERE id = ?`).run(summary, id);
-    this.changed();
-  }
-
-  setRepoStage(id: string, stage: RepoStage) {
-    this.conn.prepare(`UPDATE repos SET stage = ? WHERE id = ?`).run(stage, id);
     this.changed();
   }
 

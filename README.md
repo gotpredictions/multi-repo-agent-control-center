@@ -22,10 +22,13 @@ default):
   it does not run the agent loop itself, so a coordinator dispatching through it works whether or
   not VS Code happens to be open at that moment (the dispatch just sits `queued` until the daemon
   is running to pick it up).
-- **`src/extension.ts`** — the VS Code host. Renders `media/dashboard.html` in a webview, injecting
-  a snapshot as `window.__CC_BOOTSTRAP__`; re-renders whenever the daemon reports a DB change.
-  Webview actions (dispatch, resolve an escalation, answer a finding, pause/start/stop) post a
-  message back to the extension, which relays it to the daemon.
+- **`src/extension.ts`** — the VS Code host. Renders `media/dashboard.html` in a webview for the
+  repo table/plan/findings/log tabs (injecting a snapshot as `window.__CC_BOOTSTRAP__`, then
+  `postMessage`-ing updates into the still-loaded page rather than re-rendering the whole thing —
+  see the note on that below). The per-repo tagged message stream and escalation-answering are
+  deliberately *not* in the webview: each repo gets a real `vscode.OutputChannel` for its log, and
+  a new escalation shows a native notification with an "Answer" action that opens
+  `showQuickPick`/`showInputBox` — genuine VS Code UI, not a webview panel imitating one.
 
 **Three distinct channels, deliberately not interchangeable** (see the idea doc and this repo's
 own design conversation for why):
@@ -35,10 +38,24 @@ own design conversation for why):
   `permission` (the SDK's `canUseTool` actually blocked a tool call) and `reply` (the agent called
   the `ask_human` tool to pause its own turn for a decision it can't make alone — e.g. "commit
   and/or deploy?"). Neither is answerable by queuing another dispatch — the daemon's dispatch loop
-  skips any repo whose `agent_status` is `needsHuman` until its escalation is resolved.
+  skips any repo whose `agent_status` is `needsHuman` until its escalation is resolved. Answered via
+  a native `showQuickPick` (options as `{label, detail}`, plus a "Type something…" free-text
+  fallback via `showInputBox`) — not a webview panel.
 - **Findings** — a durable log, not a live channel. Decisions an agent made autonomously along the
   way, or items it surfaced that are waiting on a human. Answering one here only records the
-  decision; relaying it back to the agent is a separate, later dispatch.
+  decision; relaying it back to the agent is a separate, later dispatch. Also where a
+  *requirement's* progress through critique → plan → implement → close → done belongs, if you want
+  a durable record of it — see below for why that's not a repo-level field.
+
+**No per-repo lifecycle field.** Critique → plan → implement → close → done is a real, useful
+discipline (see the MCP server's own instructions for the full framing), but it describes a
+*requirement's* progress, not a repo's — a requirement often spans several repos at once, and a
+repo you're tracking carries many different requirements over its lifetime, one after another. An
+earlier version of this added `repos.stage` for this and surfaced it in the Repos tab; that was a
+real modeling mistake (confirmed confusing in practice), not just a display choice, and was removed
+entirely rather than just hidden. The plan's own progress already has real, granular tracking —
+each task's own status in `upsert_task`/`get_tasks` — so "is the plan done" was never going to be a
+single field either.
 
 **No hardcoded repo list.** The tracked repo set starts empty and only ever grows through something
 that actually happened — never a bundled fixture (see `src/discover.ts`):
@@ -64,8 +81,6 @@ one as half-bootstrapped template scaffolding before any real dispatch hit that 
 - "Dispatch now" vs "queue" both land as an ordinary FIFO-queued dispatch; there's no queue-jump
   (the `intro` dispatch is the one deliberate exception — see above).
 - Editing an already-queued dispatch's text lands as a new queued dispatch, not an in-place edit.
-- "Chat about this" on an escalation just opens the free-text answer box — there's no real
-  sub-conversation thread.
 - GitHub discovery's "capabilities" are shallow on purpose (exists + locally runnable, plus
   archived/private/description) — it does not try to infer stack or purpose; that's `summary`'s job
   once a repo is actually started.
@@ -84,7 +99,9 @@ without you choosing it.
 
 Discovered repos start `stopped` (deliberately — nothing runs real Agent SDK sessions against real
 repos until you explicitly start one from the dot menu, which also queues that repo's first
-`summary` pass). Queue a dispatch, start the agent, and watch the Watch panel.
+`summary` pass). Queue a dispatch, start the agent, and watch its output in the
+"Control Center: &lt;repo&gt;" channel in the Output panel — a new permission or reply escalation
+shows up as a VS Code notification with an "Answer" action.
 
 ### Registering the MCP server with a coordinator session
 
@@ -115,5 +132,3 @@ Either way, verify with `claude mcp list` (should show `control-center — ✔ C
 Registering doesn't reach sessions already running — MCP servers load at session start, not
 hot-reloaded into one already open, so an existing session needs to be restarted before it'll see
 this tool.
-
-(Add `--db <path>` if you're not using the default `~/.control-center/control-center.db`.)
