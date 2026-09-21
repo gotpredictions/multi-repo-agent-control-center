@@ -17,7 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Db } from "./db";
+import { Db, FindingBy } from "./db";
 import { INTRO_PROMPT } from "./prompts";
 import { runGithubDiscoveryAndUpsert, runLocalDiscoveryAndUpsert } from "./discover";
 import { startAgent, stopAgent } from "./repoActions";
@@ -423,9 +423,23 @@ server.tool(
 
 server.tool(
   "add_finding",
-  "Log a new finding or scoping note against a repo (or 'coordinator' for cross-cutting items) — for the coordinator's own observations, not just agent-surfaced ones.",
-  { repoId: z.string(), text: z.string(), phase: z.string().optional() },
-  async ({ repoId, text: body, phase }) => text(db.addFinding(repoId, body, phase ?? "", "human", "watch", "Triage — not yet assessed"))
+  "Log a new finding or scoping note against a repo (or 'coordinator' for cross-cutting items) — for the coordinator's own observations, not just agent-surfaced ones. Two shapes: an FYI record of a decision you already made yourself (the default — shows as 'by: AI', never counts toward the dashboard's 'waiting on a human' count), or something that genuinely can't proceed without a human's call (waitingOnHuman: true — shows an Answer… button, counts toward that count, answerable via answer_finding). Don't set waitingOnHuman for routine scope calls you're comfortable making autonomously — that used to be forced on every finding regardless, which made logged-and-already-decided items look unresolved.",
+  {
+    repoId: z.string(),
+    text: z.string(),
+    phase: z.string().optional(),
+    waitingOnHuman: z
+      .boolean()
+      .optional()
+      .describe(
+        "true if this genuinely blocks on a human decision; false/omitted (the default) for an FYI record of something you decided yourself."
+      ),
+  },
+  async ({ repoId, text: body, phase, waitingOnHuman }) => {
+    const by: FindingBy = waitingOnHuman ? "wait" : "ai";
+    const disposition = waitingOnHuman ? "Waiting on a human decision" : "Logged — decided autonomously";
+    return text(db.addFinding(repoId, body, phase ?? "", by, "watch", disposition));
+  }
 );
 
 server.tool(

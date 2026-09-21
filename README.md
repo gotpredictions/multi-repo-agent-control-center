@@ -62,6 +62,12 @@ own design conversation for why):
   decision; relaying it back to the agent is a separate, later dispatch. Also where a
   *requirement's* progress through critique → plan → implement → close → done belongs, if you want
   a durable record of it — see below for why that's not a repo-level field.
+  `add_finding` defaults to logging an FYI (`by: 'ai'`) — a decision the coordinator already made
+  itself — and only counts toward the dashboard's "waiting on a human" header / shows an Answer…
+  button when the coordinator explicitly passes `waitingOnHuman: true`. It used to hardcode
+  `by: 'human'` and `disposition: 'Triage — not yet assessed'` on every finding regardless, which
+  made already-decided FYI entries look unresolved (a "Decided by: Human" badge on text that was
+  plainly the AI's own autonomous reasoning, and the header count didn't match what was on screen).
 
 **No per-repo lifecycle field.** Critique → plan → implement → close → done is a real, useful
 discipline (see the MCP server's own instructions for the full framing), but it describes a
