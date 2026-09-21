@@ -30,6 +30,16 @@ default):
   a new escalation shows a native notification with an "Answer" action that opens
   `showQuickPick`/`showInputBox` — genuine VS Code UI, not a webview panel imitating one.
 
+**No push notification reaches an MCP-connected coordinator session.** `dispatch` returns as soon
+as the work is *queued*, not when it's done — real work can take minutes. The VS Code extension's
+native notifications (escalations) only reach the human at the keyboard; a coordinator has no
+equivalent today. It has to poll: `get_repo_status(repoId)` for one repo, or MCP's
+`list_recent_activity` (wraps `db.listLogEntries()` — one entry per dispatch sent, another per
+response landed, across every repo, most recent first) for "what's happened since I last looked."
+Confirmed live: a coordinator dispatched to two repos, both finished, and the coordinator never
+noticed until told to go check `list_recent_activity` — which is exactly why `dispatch`'s own tool
+description and the server instructions now say this explicitly, not just this README.
+
 **Three distinct channels, deliberately not interchangeable** (see the idea doc and this repo's
 own design conversation for why):
 - **Dispatches** — proactive, human-initiated: design adjustments, clarification requests. Queued,

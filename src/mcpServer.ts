@@ -101,10 +101,21 @@ add_finding (scoped to the relevant repo, or 'coordinator' for
 something cross-cutting) rather than reaching for a status field that
 doesn't exist.
 
+Nothing pushes a dispatch's result back to you when it lands — there is
+no notification reaching a coordinator session today, MCP's own
+notification primitives or not (unverified whether they'd even reach
+you if used). If you dispatch and then end your turn, you will not
+hear about it finishing. Either wait and poll (get_repo_status for one
+repo, list_recent_activity for all of them at once) before ending your
+turn if the result actually matters to what happens next, or say
+explicitly that you're not waiting and how you intend to check back —
+don't let a dispatch quietly become fire-and-forget by accident.
+
 Typical loop: list_repos to see what's tracked and its status → dispatch
-to hand a repo new work → list_open_escalations to see what's actually
-blocked and needs you → resolve_escalation to unblock it. Repo ids are
-short slugs (list_repos shows them), not full repo names.`;
+to hand a repo new work → list_recent_activity or get_repo_status to see
+what's actually landed → list_open_escalations to see what's blocked and
+needs you → resolve_escalation to unblock it. Repo ids are short slugs
+(list_repos shows them), not full repo names.`;
 
 const server = new McpServer(
   {
@@ -192,7 +203,7 @@ server.tool(
 
 server.tool(
   "dispatch",
-  "Send a proactive message to a repo's agent — a design adjustment, a clarification request, a new task. This is NOT for answering a live permission escalation (use resolve_escalation for that) and is NOT itself a live interrupt: it's queued and the repo's agent picks it up when free. Write it the way you'd brief a person: context, the task, constraints, what done looks like.",
+  "Send a proactive message to a repo's agent — a design adjustment, a clarification request, a new task. This is NOT for answering a live permission escalation (use resolve_escalation for that) and is NOT itself a live interrupt: it's queued and the repo's agent picks it up when free. Write it the way you'd brief a person: context, the task, constraints, what done looks like. This call returns as soon as the dispatch is QUEUED, not when it's done — the real work can take minutes. Nothing pushes the result back to you; check for it yourself later via get_repo_status(repoId) (its dispatches array, state: 'sent' with a non-empty response) or list_recent_activity (across every repo at once, 'responded' entries).",
   {
     repoId: z.string().describe("The repo's short id — see list_repos."),
     text: z.string().describe("The full dispatch prompt."),
@@ -330,6 +341,13 @@ server.tool(
   "The rollout gantt: every task, its repo, hours estimate, status, and dependencies — the same data the dashboard renders as a gantt chart.",
   {},
   async () => text(db.listTasks())
+);
+
+server.tool(
+  "list_recent_activity",
+  "The uniform 'has anything happened' feed across every repo at once — one entry each time a dispatch is actually sent, another when its response lands. Nothing pushes this to you (there is no notification mechanism reaching a coordinator session today, only the dashboard's own local UI); this is what you poll after dispatching somewhere, instead of separately calling get_repo_status per repo to check. Most recent first.",
+  { limit: z.number().optional().describe("Max entries to return. Defaults to 100.") },
+  async ({ limit }) => text(db.listLogEntries(limit ?? 100))
 );
 
 server.tool(
