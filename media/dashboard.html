@@ -8,6 +8,39 @@
 <script src="{{SUPPORT_URI}}"></script>
 </head>
 <body>
+<script>
+// Defense in depth, independent of any specific root cause: if anything
+// throws uncaught before the app has a chance to render (this runtime's own
+// internals included — see the acquireVsCodeApi comment further down for
+// one confirmed cause, but this catches any future one too), the dashboard
+// used to go silently blank or show raw, unstyled backing data with no
+// indication anything was wrong. That's what actually prompted this: a real
+// user staring at a broken panel with no error, no obvious next step. This
+// runs before anything else and uses only vanilla DOM APIs — no React, no
+// dependency on the runtime that might be what's broken — so it still works
+// even when the thing that crashed is the rendering system itself. It only
+// ever adds a banner; it never removes or replaces existing content, so a
+// real (but harmless) error elsewhere won't hide a dashboard that otherwise
+// rendered fine.
+(function () {
+  var shown = false;
+  function showFallback(detail) {
+    if (shown) return;
+    shown = true;
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#5a1d1d;color:#f8d7da;'
+      + 'font:12px system-ui,sans-serif;padding:10px 14px;border-bottom:1px solid #f14c4c;white-space:pre-wrap;';
+    el.textContent = 'Agent Control Center failed to load (' + detail + '). '
+      + 'Try "Developer: Reload Window", then "Developer: Open Webview Developer Tools" '
+      + 'for the full error if it happens again.';
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  window.addEventListener('error', function (e) { showFallback(e.message || 'unknown error'); });
+  window.addEventListener('unhandledrejection', function (e) {
+    showFallback((e.reason && (e.reason.message || String(e.reason))) || 'unhandled rejection');
+  });
+})();
+</script>
 <x-dc>
 <helmet>
 <style>
@@ -425,7 +458,17 @@ button { font: inherit; }
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":960,"height":640}}'>
 var __bootstrap = (typeof window !== 'undefined' && window.__CC_BOOTSTRAP__) || null;
-var __vscode = (typeof acquireVsCodeApi === 'function') ? acquireVsCodeApi() : null;
+// This whole <script type="text/x-dc"> block is inert to the browser (not a
+// real MIME type) — the dc-runtime eval's it itself, on purpose, more than
+// once: once to boot the app, and again whenever its own self-refresh path
+// re-parses the page. acquireVsCodeApi() throws on a second call within the
+// same webview session ("An instance of the VS Code API has already been
+// acquired"), which was aborting that second eval partway through and
+// leaving the runtime's component registration half-built — the actual
+// cause of the dashboard going blank/garbled with no visible error. Caching
+// the one real instance on window makes every eval past the first reuse it
+// instead of re-acquiring, so a re-eval no longer throws here.
+var __vscode = window.__ccVsCodeApi || (window.__ccVsCodeApi = (typeof acquireVsCodeApi === 'function') ? acquireVsCodeApi() : null);
 function notifyHost(msg) {
   if (__vscode) { try { __vscode.postMessage(msg); } catch (e) { /* not fatal — next daemon push reconciles */ } }
 }
