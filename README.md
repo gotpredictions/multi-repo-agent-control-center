@@ -260,10 +260,18 @@ here) rather than assumed:
 - A registered Marketplace publisher (Azure DevOps org + a Personal Access Token scoped to
   "Marketplace (Manage)"), matching `package.json`'s `publisher` field — currently `"local-dev"`, a
   placeholder.
-- `"private": true` needs to come out of `package.json`; `"repository"` is still `{ "url": "local" }`,
-  a placeholder from before this repo had a real GitHub remote.
-- A `LICENSE` file — `vsce package` has been warning about its absence on every single package run
-  in this repo's history so far; non-fatal, easy to miss.
+- `"private": true` needs to come out of `package.json`. ~~`"repository"` is still a
+  placeholder~~ — done, points at the real GitHub remote now (had to be fixed anyway: `vsce
+  package` started hard-erroring once the LICENSE/CONTRIBUTING links below were added to this
+  README, since it couldn't resolve relative links without a real repo URL to rewrite them
+  against).
+- ~~A `LICENSE` file~~ — done: [PolyForm Strict License 1.0.0](LICENSE), noncommercial use only,
+  Signed Off as licensor (see [CONTRIBUTING.md](CONTRIBUTING.md) for the separate
+  contribution/IP-assignment terms this needed on top of it, since PolyForm Strict alone doesn't
+  grant permission to modify the software at all, let alone contribute back). Not reviewed by
+  Signed Off's own legal counsel yet — see that file's own "Draft status" note. Worth checking
+  before a real Marketplace listing whether a noncommercial-only license needs anything extra
+  disclosed there; not verified either way.
 - An icon and a `.vscodeignore` (packaging currently ships raw `node_modules` wholesale — 4700+
   files — rather than trimming dev-only cruft).
 - The real blocker, not just a nuisance: the Agent SDK's bundled native binary is platform-specific
