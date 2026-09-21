@@ -580,6 +580,18 @@ export class Db {
     return row?.id ?? null;
   }
 
+  // Changes whenever ANY connection commits a write to this database file
+  // — including a different process (mcpServer.ts, spawned separately per
+  // coordinator session, writes through its own Db instance, so this
+  // process's own onChange() never fires for that). This is how the
+  // daemon detects those writes: poll this, not a same-process-only
+  // callback, for anything that has to reflect writes from outside this
+  // process.
+  dataVersion(): number {
+    const row = this.conn.prepare(`PRAGMA data_version`).get() as { data_version: number };
+    return row.data_version;
+  }
+
   close() {
     this.conn.close();
   }

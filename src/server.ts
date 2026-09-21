@@ -37,7 +37,41 @@ const db = new Db(dbPath);
 
 const busy = new Set<string>();
 
+// ---- stdio protocol for the extension host ----
+
+type Req = { id: number; cmd: string; [k: string]: any };
+
+function send(obj: unknown) {
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+let changePending = false;
+function notifyChanged() {
+  if (changePending) return;
+  changePending = true;
+  setImmediate(() => {
+    changePending = false;
+    send({ event: "update" });
+  });
+}
+db.onChange(notifyChanged);
+
+// Same-process writes (this daemon's own command handlers, agentRunner.ts
+// via the tick loop below) fire db.onChange() directly. Writes from
+// mcpServer.ts — a separate process, spawned fresh per coordinator
+// session — don't; they land in the same file but this process has no
+// callback for them, only a poll-able signal (see Db.dataVersion). Piggy-
+// backing on the same interval the dispatch loop already runs on, rather
+// than adding a second timer.
+let lastDataVersion = db.dataVersion();
+
 function tick() {
+  const v = db.dataVersion();
+  if (v !== lastDataVersion) {
+    lastDataVersion = v;
+    notifyChanged();
+  }
+
   for (const repo of db.listRepos()) {
     if (busy.has(repo.id)) continue;
     if (repo.paused) continue;
@@ -57,24 +91,6 @@ function tick() {
   }
 }
 setInterval(tick, POLL_MS);
-
-// ---- stdio protocol for the extension host ----
-
-type Req = { id: number; cmd: string; [k: string]: any };
-
-function send(obj: unknown) {
-  process.stdout.write(JSON.stringify(obj) + "\n");
-}
-
-let changePending = false;
-db.onChange(() => {
-  if (changePending) return;
-  changePending = true;
-  setImmediate(() => {
-    changePending = false;
-    send({ event: "update" });
-  });
-});
 
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {

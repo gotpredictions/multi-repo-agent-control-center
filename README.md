@@ -21,7 +21,13 @@ default):
   `.mcp.json`. Thin and stateless beyond the DB (every tool call is a direct SQLite read/write) —
   it does not run the agent loop itself, so a coordinator dispatching through it works whether or
   not VS Code happens to be open at that moment (the dispatch just sits `queued` until the daemon
-  is running to pick it up).
+  is running to pick it up). It's a genuinely separate OS process from the daemon, with its own `Db`
+  connection — the daemon's `db.onChange()` only fires for writes made through *its own* connection,
+  so an MCP write (e.g. `add_finding`) doesn't trigger it directly. The daemon instead polls
+  `PRAGMA data_version` (SQLite's own signal for "another connection committed a write") on the same
+  interval as its dispatch loop, and treats a change there the same as a same-process one. Without
+  this, an MCP-driven write landed in the DB fine but the webview just never found out — confirmed
+  live, fixed by polling rather than assuming same-process events cover every writer.
 - **`src/extension.ts`** — the VS Code host. Renders `media/dashboard.html` in a webview for the
   repo table/plan/findings/log tabs (injecting a snapshot as `window.__CC_BOOTSTRAP__`, then
   `postMessage`-ing updates into the still-loaded page rather than re-rendering the whole thing —
