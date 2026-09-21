@@ -224,6 +224,23 @@ function clock(): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+// clock()'s HH:MM:SS is intentionally date-less — it's for narrow display
+// columns (the Log tab, dispatch rows) that only ever show a same-day
+// value, and string-sorting it only needs to hold up within one day (see
+// listLogEntries' own comment). That assumption breaks for a real
+// gate check: countFindingsForRequirement's Done gate compares a
+// finding's created_at against closing_entered_at with `>=`, and if
+// Closing was entered late one day and the finding logged just after
+// midnight, "00:05:00" >= "23:50:00" is false — a real requirement
+// spanning a day boundary would be incorrectly told no finding was
+// logged since Closing began. Neither created_at (findings) nor
+// closing_entered_at is ever displayed in the dashboard, so widening
+// their format has no UI impact — this is used for exactly those two,
+// not clock()'s existing display call sites.
+function sortableClock(): string {
+  return new Date().toISOString();
+}
+
 export class Db {
   private conn: DatabaseSync;
   private onChangeCb: (() => void) | null = null;
@@ -457,7 +474,7 @@ export class Db {
         `INSERT INTO findings (id, repo_id, text, phase, disposition, by, sev, answer, created_at, requirement_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)`
       )
-      .run(id, repoId, text, phase, disposition, by, sev, clock(), requirementId);
+      .run(id, repoId, text, phase, disposition, by, sev, sortableClock(), requirementId);
     this.changed();
     return this.getFinding(id)!;
   }
@@ -635,7 +652,7 @@ export class Db {
   // combined end-to-end run), not just any finding from earlier in the
   // requirement's life.
   markClosingEntered() {
-    this.setMeta("closing_entered_at", clock());
+    this.setMeta("closing_entered_at", sortableClock());
   }
 
   countFindingsForRequirement(requirementId: number, sinceClock?: string): number {
