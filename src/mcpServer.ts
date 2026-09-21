@@ -86,20 +86,83 @@ dashboard, and gets stale the moment reality diverges from what you
 said would happen. Update it with upsert_task as the plan itself
 changes, not just once at the start.
 
-Critique → plan → implement → close → done is a requirement's own
+Critique → plan → implement → closing → done is a requirement's own
 lifecycle, not a repo's — a single requirement often spans several
 repos at once, and a repo you're tracking will carry many different
-requirements over its lifetime, one after another. There's deliberately
-no per-repo "stage" field to set: that would only be right for the one
-requirement currently in flight there, and wrong the moment a second
-one starts or the first one finishes. The plan's own progress already
-has real, granular tracking — each task's status in upsert_task/
-get_tasks (todo/active/blocking/done) — so "is the plan done" is never
-a single field either, it's "are its tasks done." If you want a durable
-record of a requirement moving between these stages, log it with
-add_finding (scoped to the relevant repo, or 'coordinator' for
-something cross-cutting) rather than reaching for a status field that
-doesn't exist.
+requirements over its lifetime, one after another. That's why
+set_requirement_phase/get_requirement_phase track ONE current
+requirement, not a per-repo field: there is deliberately no dashboard
+control for this and no other way to set it — only you, the
+coordinator, ever should. See the full lifecycle addendum below for
+what actually gates each phase; it is not "nothing left in the queue."
+This is a single slot (one requirement in flight at a time as tracked
+here, not a queue of many) — if you're picking up a new requirement,
+set the phase back to 'critique' deliberately rather than assuming a
+fresh start.
+
+---
+The following is a project-level addendum a coordinator session wrote
+after actually running this lifecycle once, verbatim, because it
+reflects what the gates need to mean in practice better than a
+first-pass description would:
+
+A requirement moves through five phases: Critique → Plan → Implement → Closing →
+Done. Each phase has a gate — a specific thing that must exist in the control
+center's own state before advancing — not just "nothing left in the dispatch
+queue." A phase indicator that advances on queue-empty/no-escalations alone is
+reporting a false signal; these gates exist to prevent that.
+
+Critique — the requirement is researched and understood before any repo work
+starts. Record open questions and resolved ambiguities as add_finding against
+'coordinator' — not only in chat — so they survive across sessions. Use
+AskUserQuestion for anything only the requirement owner can decide (naming,
+stack choices, scope boundaries). Gate: do not advance to Plan while a
+material ambiguity is still unresolved.
+
+Plan — the implementation plan, with cross-repo dependencies, is captured in
+the control center's task graph. Use upsert_task for every step, across every
+repo involved. Every task's task text must state its own test requirement
+alongside the work — e.g. "CRUD endpoints for todos — tests: pytest against
+real Postgres hitting all 4 routes", not just "CRUD endpoints." A task with no
+stated test is an incomplete plan step. Encode cross-repo ordering via deps,
+not assumed sequencing. Gate: no task exists without a stated test
+requirement.
+
+Implement — code is implemented and individual steps are completed. Dispatch
+each step with full context (contract, constraints, what done looks like) —
+write it like a brief to a colleague who has no prior context. Mark a task
+done in upsert_task only after reading the actual dispatch response and the
+evidence it claims (test output, files, commits) — not on state: sent /
+queue-empty alone. If an agent's own verification stood in for real infra
+(e.g. SQLite instead of Postgres, mocks instead of a live API), that caveat
+must be carried forward explicitly, not dropped when the task flips to done.
+Gate: every task in Plan is done with evidence, not just dispatched.
+
+Closing — an end-to-end test exercises the combined system, not each repo's
+isolated suite. This step belongs to the coordinator (or a dedicated
+integration task), not any single repo's agent — no one repo can validate a
+cross-repo contract by itself. Advancing to Closing requires a passing
+combined-system run, with its output attached as an add_finding. If the
+environment cannot run it (missing infra, permissions, access), that blocker
+is itself an open finding — Closing is not satisfied, regardless of how idle
+the dispatch queues look. Gate: an add_finding exists documenting a passing
+end-to-end run.
+
+Done — reachable only when (1) every task in Plan is done with evidence, and
+(2) the Closing finding documents a passing combined-system run. If "Done" is
+being inferred any other way (e.g. a UI heuristic over queue and escalation
+state alone), treat that as a display bug, not a completion signal, and don't
+let it substitute for the two conditions above.
+
+Complementary practices (session-side, not control-center primitives) — these
+aren't control-center calls, but they feed the phases above and should run
+alongside them: Critique/Plan benefit from plan-mode-style research before
+touching any repo, but the output of that research must land in
+add_finding/upsert_task, or it's lost the moment the session ends. Implement
+should apply "trust but verify": an agent's summary of what it did is a
+claim, not evidence — read the actual diff/test output before marking a task
+done.
+---
 
 Nothing pushes a dispatch's result back to you when it lands — there is
 no notification reaching a coordinator session today, MCP's own
@@ -111,11 +174,13 @@ turn if the result actually matters to what happens next, or say
 explicitly that you're not waiting and how you intend to check back —
 don't let a dispatch quietly become fire-and-forget by accident.
 
-Typical loop: list_repos to see what's tracked and its status → dispatch
-to hand a repo new work → list_recent_activity or get_repo_status to see
-what's actually landed → list_open_escalations to see what's blocked and
-needs you → resolve_escalation to unblock it. Repo ids are short slugs
-(list_repos shows them), not full repo names.`;
+Typical loop: get_requirement_phase to see where things actually stand →
+list_repos to see what's tracked and its status → dispatch to hand a
+repo new work → list_recent_activity or get_repo_status to see what's
+actually landed → list_open_escalations to see what's blocked and needs
+you → resolve_escalation to unblock it → set_requirement_phase once
+you've verified the next phase's gate is actually met. Repo ids are
+short slugs (list_repos shows them), not full repo names.`;
 
 const server = new McpServer(
   {
@@ -149,6 +214,33 @@ server.tool(
       escalation: db.openEscalationForRepo(repoId),
       recentLogs: db.recentLogs(repoId, 15),
     });
+  }
+);
+
+const REQUIREMENT_PHASES = ["critique", "plan", "implement", "closing", "done"] as const;
+
+server.tool(
+  "get_requirement_phase",
+  "Read the current requirement's phase (critique/plan/implement/closing/done) and title, if set. This tracks ONE requirement at a time — not per-repo, not a queue of many. Returns phase: null if nothing has been set yet (e.g. a fresh control center, or between requirements). See the lifecycle addendum in these instructions for what actually gates each phase.",
+  {},
+  async () =>
+    text({
+      phase: db.getMeta("requirement_phase"),
+      title: db.getMeta("requirement_title"),
+    })
+);
+
+server.tool(
+  "set_requirement_phase",
+  "Set the current requirement's phase. This is the ONLY way it changes — there is no dashboard control for it, deliberately, so it never reflects a click instead of the coordinator's own judgment that a phase's gate is actually satisfied. Do not call this because the dispatch queue emptied out or escalations cleared; call it because you've verified the specific gate for the phase you're advancing to (see the lifecycle addendum in these instructions). Starting a new requirement after a previous one reached 'done'? Set this back to 'critique' explicitly — it does not reset itself.",
+  {
+    phase: z.enum(REQUIREMENT_PHASES),
+    title: z.string().optional().describe("Short label for what requirement this is, for anyone else reading the control center's state. Omit to leave the existing title unchanged."),
+  },
+  async ({ phase, title }) => {
+    db.setMeta("requirement_phase", phase);
+    if (title) db.setMeta("requirement_title", title);
+    return text({ phase: db.getMeta("requirement_phase"), title: db.getMeta("requirement_title") });
   }
 );
 

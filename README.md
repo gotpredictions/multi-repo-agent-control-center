@@ -92,6 +92,18 @@ result lands in `repos.summary`, surfaced by `list_repos`/`get_repo_status`. Ref
 via `refresh_repo_summary`. Verified end-to-end against a real repo — the summary correctly flagged
 one as half-bootstrapped template scaffolding before any real dispatch hit that surprise.
 
+**Requirement lifecycle — coordinator-set, not a dashboard control.** `get_requirement_phase` /
+`set_requirement_phase` track one requirement's progress through `critique → plan → implement →
+closing → done` (`meta` table, not a new schema addition — the key/value store already existed for
+`github_owner`/`code_root`). Deliberately MCP-only: there is no dashboard UI for this at all, so it
+can never reflect a click instead of the coordinator's own judgment that a phase's gate — a real
+one, not "the dispatch queue emptied out" — is actually satisfied. The full gate definitions live in
+`mcpServer.ts`'s `SERVER_INSTRUCTIONS`, written verbatim from a coordinator session's own
+introspection after actually running this lifecycle once (not paraphrased — see that file if you're
+looking for the source of truth on what each gate requires). Single-slot by design: one requirement
+in flight at a time as tracked here, not a queue of many; starting a new one means explicitly
+resetting the phase back to `critique`, since it doesn't reset itself.
+
 ## Known limitations (v1, ad hoc)
 
 - "Dispatch now" vs "queue" both land as an ordinary FIFO-queued dispatch; there's no queue-jump
