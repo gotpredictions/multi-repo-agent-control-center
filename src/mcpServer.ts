@@ -74,6 +74,27 @@ automatically the first time a repo is started. Empty summary usually
 means the repo has never been started, not that it has nothing to say;
 call refresh_repo_summary to get one without waiting on other work.
 
+Before dispatching real implementation work, critique the requirement
+first — is it actually sound, does it conflict with what a repo's
+summary says about its current state, is anything ambiguous enough to
+ask about (ask_human, or a finding if it's not blocking) — rather than
+dispatching straight to implementation and finding out the hard way.
+Once it holds up, write the plan as real tasks via upsert_task rather
+than only describing it in a dispatch or your own reply — a plan that
+only exists as prose is invisible to anyone else looking at the
+dashboard, and gets stale the moment reality diverges from what you
+said would happen. Update it with upsert_task as the plan itself
+changes, not just once at the start.
+
+Track each repo's stage with set_repo_stage as its requirement actually
+moves through critique → plan → implement → close → done — update it
+when the underlying reality changes (the critique held up, the plan is
+written, real implementation started, wrap-up began, it's actually
+done), not on a schedule and not just because the agent happens to be
+idle right now. This is separate from agent_status: a repo can sit idle
+mid-'implement' because more work is still queued, not because the
+requirement moved to a different stage.
+
 Typical loop: list_repos to see what's tracked and its status → dispatch
 to hand a repo new work → list_open_escalations to see what's actually
 blocked and needs you → resolve_escalation to unblock it. Repo ids are
@@ -303,6 +324,49 @@ server.tool(
   "The rollout gantt: every task, its repo, hours estimate, status, and dependencies — the same data the dashboard renders as a gantt chart.",
   {},
   async () => text(db.listTasks())
+);
+
+server.tool(
+  "upsert_task",
+  "Create or update one task on the implementation plan (the gantt). Reusing an existing id updates that task in place rather than creating a duplicate — this is how a plan gets kept current as work actually progresses, not just written once and left stale. See get_tasks for the current scale/ids before adding dependents.",
+  {
+    id: z.string().describe("Stable id for this task. Reuse it on later calls to update rather than duplicate."),
+    repo: z.string().describe("Repo name shown on the gantt (a display label, not checked against tracked repos)."),
+    task: z.string().describe("Short description shown on the gantt bar."),
+    startH: z.number().describe("Start offset in hours from the plan's own zero point — not a calendar date. Check existing tasks (get_tasks) for the current scale before picking one."),
+    durH: z.number().describe("Duration in hours. Use 0 for a milestone."),
+    status: z.enum(["todo", "active", "blocking", "done"]).optional().describe("Defaults to 'todo'."),
+    deps: z.array(z.string()).optional().describe("Ids of tasks this one depends on — drawn as dependency arrows on the gantt."),
+    milestone: z.boolean().optional(),
+  },
+  async ({ id, repo, task, startH, durH, status, deps, milestone }) => {
+    db.upsertTask({
+      id,
+      repo,
+      task,
+      start_h: startH,
+      dur_h: durH,
+      status: status ?? "todo",
+      deps: deps ?? [],
+      milestone: milestone ? 1 : 0,
+    });
+    return text(db.listTasks().find((t) => t.id === id));
+  }
+);
+
+server.tool(
+  "set_repo_stage",
+  "Update where this repo's requirement actually stands in its own lifecycle: 'critique' (validating the requirement itself — does it make sense, is it actually needed, before committing to a plan), 'plan' (an implementation plan exists and is current — see upsert_task), 'implement' (actively building against that plan), 'close' (implementation done, wrapping up — docs, review, merge), or 'done'. This is NOT agent_status (whether the agent is currently running right now) — a repo can be idle while its stage is still 'implement' because there's more queued work; update stage when the underlying reality changes, not when the agent happens to pause.",
+  {
+    repoId: z.string().describe("The repo's short id — see list_repos."),
+    stage: z.enum(["critique", "plan", "implement", "close", "done"]),
+  },
+  async ({ repoId, stage }) => {
+    const repo = db.getRepo(repoId);
+    if (!repo) return text({ error: `no such repo: ${repoId}` });
+    db.setRepoStage(repoId, stage);
+    return text(db.getRepo(repoId));
+  }
 );
 
 async function main() {

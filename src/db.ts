@@ -18,6 +18,12 @@ export type DispatchState = "queued" | "sent";
 export type DispatchKind = "user" | "intro";
 export type FindingBy = "ai" | "wait" | "human";
 export type FindingSev = "open" | "watch" | "done";
+// The requirement's own lifecycle, distinct from agent_status (is the
+// agent currently working) and from the free-text `phase` label (whatever
+// the coordinator wants to call it, e.g. "Phase 2 - 2b"). 'critique' is the
+// default and deliberately comes before 'plan': requirements get validated
+// before a plan is written against them, not after.
+export type RepoStage = "critique" | "plan" | "implement" | "close" | "done";
 
 export interface Repo {
   id: string;
@@ -27,6 +33,7 @@ export interface Repo {
   prs: string;
   agent_status: AgentStatus;
   paused: 0 | 1;
+  stage: RepoStage;
   // Agent-authored self-introduction — what this repo is, stack, conventions,
   // current state — populated by an automatic 'intro' dispatch the first
   // time the repo is ever started, refreshable on demand after that. Empty
@@ -43,7 +50,19 @@ export interface Dispatch {
   state: DispatchState;
   at: string;
   response: string;
+  responded_at: string;
   session_id: string | null;
+}
+
+// A unified, cross-repo, time-sorted feed of "dispatch sent" / "response
+// received" events — derived entirely from the dispatches table, not a
+// separately-tracked log. Answers "is anything actually happening" across
+// every repo at once, which no single repo's own dispatch queue or Watch
+// panel shows on its own.
+export interface LogEntry {
+  when: string;
+  repo: string;
+  text: string;
 }
 
 export interface EscalationOption {
@@ -109,6 +128,7 @@ export interface Snapshot {
   findings: Finding[];
   tasks: Task[];
   logs: Record<string, LogLine[]>;
+  log: LogEntry[];
 }
 
 const SCHEMA = `
@@ -120,7 +140,8 @@ CREATE TABLE IF NOT EXISTS repos (
   prs TEXT NOT NULL DEFAULT '',
   agent_status TEXT NOT NULL DEFAULT 'stopped',
   paused INTEGER NOT NULL DEFAULT 0,
-  summary TEXT NOT NULL DEFAULT ''
+  summary TEXT NOT NULL DEFAULT '',
+  stage TEXT NOT NULL DEFAULT 'critique'
 );
 
 CREATE TABLE IF NOT EXISTS dispatches (
@@ -131,6 +152,7 @@ CREATE TABLE IF NOT EXISTS dispatches (
   state TEXT NOT NULL DEFAULT 'queued',
   at TEXT NOT NULL DEFAULT '',
   response TEXT NOT NULL DEFAULT '',
+  responded_at TEXT NOT NULL DEFAULT '',
   session_id TEXT,
   seq INTEGER NOT NULL
 );
@@ -219,11 +241,11 @@ export class Db {
 
   // ---- repos ----
 
-  upsertRepo(r: Omit<Repo, "paused" | "summary"> & { paused?: boolean }) {
+  upsertRepo(r: Omit<Repo, "paused" | "summary" | "stage"> & { paused?: boolean }) {
     this.conn
       .prepare(
-        `INSERT INTO repos (id, repo, cwd, phase, prs, agent_status, paused, summary)
-         VALUES (?, ?, ?, ?, ?, ?, ?, '')
+        `INSERT INTO repos (id, repo, cwd, phase, prs, agent_status, paused, summary, stage)
+         VALUES (?, ?, ?, ?, ?, ?, ?, '', 'critique')
          ON CONFLICT(id) DO UPDATE SET repo=excluded.repo, cwd=excluded.cwd,
            phase=excluded.phase, prs=excluded.prs`
       )
@@ -233,6 +255,11 @@ export class Db {
 
   setRepoSummary(id: string, summary: string) {
     this.conn.prepare(`UPDATE repos SET summary = ? WHERE id = ?`).run(summary, id);
+    this.changed();
+  }
+
+  setRepoStage(id: string, stage: RepoStage) {
+    this.conn.prepare(`UPDATE repos SET stage = ? WHERE id = ?`).run(stage, id);
     this.changed();
   }
 
@@ -267,8 +294,8 @@ export class Db {
     ).n;
     this.conn
       .prepare(
-        `INSERT INTO dispatches (id, repo_id, kind, text, state, at, response, session_id, seq)
-         VALUES (?, ?, 'user', ?, 'queued', '', '', NULL, ?)`
+        `INSERT INTO dispatches (id, repo_id, kind, text, state, at, response, responded_at, session_id, seq)
+         VALUES (?, ?, 'user', ?, 'queued', '', '', '', NULL, ?)`
       )
       .run(id, repoId, text, seq);
     this.changed();
@@ -287,8 +314,8 @@ export class Db {
     ).n;
     this.conn
       .prepare(
-        `INSERT INTO dispatches (id, repo_id, kind, text, state, at, response, session_id, seq)
-         VALUES (?, ?, 'intro', ?, 'queued', '', '', NULL, ?)`
+        `INSERT INTO dispatches (id, repo_id, kind, text, state, at, response, responded_at, session_id, seq)
+         VALUES (?, ?, 'intro', ?, 'queued', '', '', '', NULL, ?)`
       )
       .run(id, repoId, text, seq);
     this.changed();
@@ -332,7 +359,9 @@ export class Db {
   }
 
   setDispatchResponse(id: string, response: string) {
-    this.conn.prepare(`UPDATE dispatches SET response = ? WHERE id = ?`).run(response, id);
+    this.conn
+      .prepare(`UPDATE dispatches SET response = ?, responded_at = ? WHERE id = ?`)
+      .run(response, clock(), id);
     this.changed();
   }
 
@@ -460,6 +489,43 @@ export class Db {
     return rows.map((r) => ({ ...r, deps: JSON.parse(r.deps_json) }));
   }
 
+  // A unified "is anything happening" feed: one entry when a dispatch is
+  // actually sent, another when its response lands — derived from the
+  // dispatches table already written by markDispatchSent/setDispatchResponse,
+  // not a separate thing that has to be kept in sync with it.
+  listLogEntries(limit = 100): LogEntry[] {
+    const rows = this.conn
+      .prepare(
+        `SELECT d.at, d.responded_at, d.text, d.response, r.repo AS repo_name
+         FROM dispatches d JOIN repos r ON r.id = d.repo_id
+         WHERE d.at != '' OR d.responded_at != ''`
+      )
+      .all() as any[];
+
+    const entries: LogEntry[] = [];
+    for (const row of rows) {
+      if (row.at) {
+        entries.push({
+          when: row.at,
+          repo: row.repo_name,
+          text: `dispatched — ${String(row.text).split("\n")[0].slice(0, 100)}`,
+        });
+      }
+      if (row.responded_at) {
+        entries.push({
+          when: row.responded_at,
+          repo: row.repo_name,
+          text: `responded — ${String(row.response).split("\n")[0].slice(0, 100)}`,
+        });
+      }
+    }
+    // Same HH:MM:SS-only convention as clock() elsewhere in this file
+    // (see its own comment) — string-sortable within a day, and this
+    // whole system doesn't track dates beyond that yet.
+    entries.sort((a, b) => a.when.localeCompare(b.when));
+    return entries.slice(-limit).reverse();
+  }
+
   // ---- snapshot for the webview ----
 
   snapshot(): Snapshot {
@@ -475,6 +541,7 @@ export class Db {
       findings: this.listFindings(),
       tasks: this.listTasks(),
       logs,
+      log: this.listLogEntries(),
     };
   }
 

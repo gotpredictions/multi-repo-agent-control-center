@@ -21,8 +21,14 @@ button { font: inherit; }
 .cc-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .cc-gantt-row { display: flex; align-items: center; padding: 3px 0; font-size: 12px; }
 .cc-gantt-row:hover { background: #262626; }
-.cc-scrollx { overflow-x: auto; overflow-y: hidden; }
-/* Below this, a real VS Code webview panel can still get narrower than the
+.cc-scrollx { overflow-x: auto; }
+/* overflow-y was 'hidden' here originally, paired reflexively with
+   overflow-x rather than for a real reason — it clipped the repo
+   row's absolutely-positioned dot menu the moment the menu extended
+   past this wrapper's own box, hiding everything past whatever
+   happened to fit. Nothing in any of the four uses of this class needs
+   vertical clipping, so it's gone.
+   Below this, a real VS Code webview panel can still get narrower than the
    data wants — .cc-scrollx lets those sections scroll sideways rather than
    clip or illegibly squish columns; there's no fixed-width artboard to fall
    back on once this is a real, resizable, sometimes-narrow-docked panel. */
@@ -91,11 +97,12 @@ button { font: inherit; }
           </div>
 
           <div class="cc-scrollx">
-          <div style="min-width: 620px;">
+          <div style="min-width: 710px;">
           <div style="display: flex; align-items: center; height: 16px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
             <div style="width: 30px;">Agent</div>
             <div style="width: 230px;">Repo</div>
             <div style="width: 120px;">Phase</div>
+            <div style="width: 90px;">Stage</div>
             <div style="flex-grow: 1; min-width: 70px;">Pull requests</div>
             <div style="width: 170px;">Dispatch queue</div>
           </div>
@@ -109,6 +116,7 @@ button { font: inherit; }
                 </div>
                 <div class="cc-mono" style="width: 230px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.repo }}</div>
                 <div style="width: 120px; color: #9d9d9d;">{{ row.phase }}</div>
+                <div style="width: 90px;"><span style="{{ row.stageStyle }}">{{ row.stageLabel }}</span></div>
                 <div style="flex-grow: 1; padding-right: 10px; color: #9d9d9d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.prs }}</div>
                 <div style="width: 170px;">
                   <button type="button" style="{{ row.queueBtnStyle }}" onClick="{{ row.openDispatches }}">{{ row.queueLabel }}</button>
@@ -116,6 +124,7 @@ button { font: inherit; }
               </div>
 
               <sc-if value="{{ row.menuOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position: fixed; inset: 0; z-index: 19; background: transparent;" onClick="{{ row.closeMenu }}"></div>
                 <div style="{{ row.menuStyle }}">
                   <sc-for list="{{ row.menuItems }}" as="opt" hint-placeholder-count="3">
                     <button type="button" style="{{ opt.style }}" onClick="{{ opt.pick }}">{{ opt.label }}</button>
@@ -341,14 +350,24 @@ button { font: inherit; }
       <sc-if value="{{ isLog }}" hint-placeholder-val="{{ false }}">
         <div style="display: flex; flex-direction: column;">
           <div style="display: flex; align-items: center; padding: 0 0 8px 0; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">
-            <div style="width: 90px;">When</div>
+            <div style="width: 70px;">When</div>
+            <div style="width: 150px;">Repo</div>
             <div style="flex-grow: 1;">Entry</div>
           </div>
 
-          <!-- No narrative-log data source exists yet (unlike repos/
-               findings/tasks, nothing in db.ts backs this tab) — showing
-               a real empty state instead of fixture rows until it does. -->
-          <div style="padding: 8px 0; font-size: 11.5px; color: #8b8b8b;">Nothing logged yet.</div>
+          <!-- Derived from dispatches (sent + responded), not a
+               separately-tracked log — see db.ts's listLogEntries. -->
+          <sc-for list="{{ logRows }}" as="row" hint-placeholder-count="6">
+            <div class="cc-row">
+              <div class="cc-mono" style="width: 70px; color: #8b8b8b;">{{ row.when }}</div>
+              <div class="cc-mono" style="width: 150px; color: #9d9d9d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.repo }}</div>
+              <div style="flex-grow: 1;">{{ row.text }}</div>
+            </div>
+          </sc-for>
+
+          <sc-if value="{{ logEmpty }}" hint-placeholder-val="{{ true }}">
+            <div style="padding: 8px 0; font-size: 11.5px; color: #8b8b8b;">Nothing logged yet — dispatch something to see activity here.</div>
+          </sc-if>
         </div>
       </sc-if>
 
@@ -465,7 +484,8 @@ class Component extends DCLogic {
       taskDefs: __bootstrap ? __bootstrap.tasks : [],
       logs: __bootstrap ? __bootstrap.logs : {},
       repos: __bootstrap ? __bootstrap.repos : [],
-      items: __bootstrap ? __bootstrap.items : []
+      items: __bootstrap ? __bootstrap.items : [],
+      log: __bootstrap ? __bootstrap.log : []
     };
   }
 
@@ -843,6 +863,12 @@ class Component extends DCLogic {
       needsHuman: 'background: #f14c4c;',
       stopped: 'border: 1px solid #6e6e6e;'
     };
+    // The requirement's own lifecycle (critique -> plan -> implement ->
+    // close -> done), distinct from the agent dot above (is it running
+    // right now). Set via set_repo_stage, not derived from agent_status.
+    var stageLabels = { critique: 'Critique', plan: 'Plan', implement: 'Implement', close: 'Close', done: 'Done' };
+    var stageColors = { critique: '#9d9d9d', plan: '#4daafc', implement: '#d7ba7d', close: '#c586c0', done: '#89d185' };
+    var stageBase = 'display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 9px; font-size: 10.5px; border: 1px solid currentColor; ';
     var menuItemStyle = 'display: block; width: 100%; box-sizing: border-box; text-align: left; padding: 5px 12px; border: none; background: none; color: #cccccc; font-size: 11.5px; cursor: pointer;';
     var smallGhost = 'padding: 2px 8px; border-radius: 3px; font-size: 11px; cursor: pointer; ';
 
@@ -893,11 +919,14 @@ class Component extends DCLogic {
       return {
         repo: r.repo,
         phase: r.phase,
+        stageLabel: stageLabels[r.stage] || r.stage || 'Critique',
+        stageStyle: stageBase + 'color: ' + (stageColors[r.stage] || stageColors.critique) + ';',
         prs: r.prs,
         dotStyle: 'display: block; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box; '
           + agentDots[r.agent] + (r.paused ? ' box-shadow: 0 0 0 2px #6b551c;' : ''),
         dotBtnStyle: 'display: flex; align-items: center; justify-content: center; width: 22px; height: 20px; padding: 0; border: none; background: none; cursor: pointer;',
         toggleMenu: function () { self.setState({ menuFor: menuFor === r.id ? null : r.id }); },
+        closeMenu: function () { self.setState({ menuFor: null }); },
         menuOpen: menuFor === r.id,
         menuStyle: 'position: absolute; left: 4px; ' + (i > 5 ? 'bottom: 22px;' : 'top: 22px;')
           + ' min-width: 190px; padding: 4px 0; background: #252526; border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); z-index: 20;',
@@ -1107,6 +1136,8 @@ class Component extends DCLogic {
       linkLayerH: taskDefs.length * rowH,
 
       findingRows: findingRows,
+      logRows: this.state.log || [],
+      logEmpty: !(this.state.log || []).length,
       waitingLabel: waitingCount === 1
         ? 'Findings & inputs — 1 waiting on a human'
         : 'Findings & inputs — ' + waitingCount + ' waiting on a human',

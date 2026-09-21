@@ -79,6 +79,7 @@ function toBootstrap(snapshot: any) {
     phase: r.phase,
     prs: r.prs,
     agent: r.agent_status,
+    stage: r.stage,
     paused: !!r.paused,
     questions: r.escalation
       ? [
@@ -132,7 +133,9 @@ function toBootstrap(snapshot: any) {
     logs[repoId] = (lines as any[]).map((l) => ({ t: l.t, tag: l.tag, text: l.text }));
   }
 
-  return { repos, items, tasks, logs };
+  const log = (snapshot.log || []).map((e: any) => ({ when: e.when, repo: e.repo, text: e.text }));
+
+  return { repos, items, tasks, logs, log };
 }
 
 export function activate(context: vscode.ExtensionContext) {
