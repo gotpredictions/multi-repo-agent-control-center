@@ -345,11 +345,69 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  const createMcpJson = vscode.commands.registerCommand(
+    "multiRepoAgentControlCenter.createMcpJson",
+    async () => {
+      // The other registration path: a .mcp.json file at a project root,
+      // which Claude Code auto-discovers for sessions rooted there — no
+      // CLI invocation, and it's a plain reviewable file (shareable,
+      // diffable, committable) rather than an entry buried in
+      // ~/.claude.json. Genuinely simpler for a lot of setups; offered
+      // alongside the claude mcp add path above, not instead of it.
+      const folders = vscode.workspace.workspaceFolders;
+      let targetDir: string | undefined;
+      if (folders && folders.length === 1) {
+        targetDir = folders[0].uri.fsPath;
+      } else {
+        const picked = await vscode.window.showOpenDialog({
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+          openLabel: "Create .mcp.json here",
+          title: "Pick the project a coordinator session will run from",
+        });
+        targetDir = picked?.[0]?.fsPath;
+      }
+      if (!targetDir) return;
+
+      const mcpJsonPath = path.join(targetDir, ".mcp.json");
+      let existing: any = {};
+      if (fs.existsSync(mcpJsonPath)) {
+        try {
+          existing = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
+        } catch {
+          vscode.window.showErrorMessage(`${mcpJsonPath} exists but isn't valid JSON — not touching it.`);
+          return;
+        }
+      }
+      existing.mcpServers = existing.mcpServers || {};
+      if (existing.mcpServers["control-center"]) {
+        const confirm = await vscode.window.showWarningMessage(
+          `${mcpJsonPath} already has a "control-center" entry. Overwrite it?`,
+          { modal: true },
+          "Overwrite"
+        );
+        if (confirm !== "Overwrite") return;
+      }
+      // Merges into whatever else is already there (other MCP servers
+      // that project already configured) rather than clobbering the file.
+      existing.mcpServers["control-center"] = { command: "node", args: [mcpServerScript] };
+      fs.writeFileSync(mcpJsonPath, JSON.stringify(existing, null, 2) + "\n");
+
+      const doc = await vscode.workspace.openTextDocument(mcpJsonPath);
+      await vscode.window.showTextDocument(doc);
+      vscode.window.showInformationMessage(
+        `Wrote control-center to ${mcpJsonPath} — new sessions rooted here will pick it up.`
+      );
+    }
+  );
+
   context.subscriptions.push(
     openDashboard,
     restartRunner,
     resetAllData,
     copyMcpRegistrationCommand,
+    createMcpJson,
     { dispose: () => runner.dispose() },
     out
   );

@@ -90,24 +90,30 @@ repos until you explicitly start one from the dot menu, which also queues that r
 
 ### Registering the MCP server with a coordinator session
 
+Two options — neither hand-types a path; both are computed from where this extension is actually
+installed (`context.extensionUri`), which differs between an `F5` dev checkout and an installed
+`.vsix`, so a path hardcoded in this README would only ever be right for one of them.
+
+**Simpler: a `.mcp.json` file.** Run **"Agent Control Center: Create .mcp.json"** from the Command
+Palette (or the walkthrough's button). Writes/merges a `control-center` entry into a `.mcp.json` at
+a project root — plain, reviewable, committable, and auto-discovered by Claude Code for sessions
+rooted there. No CLI invocation, no touching `~/.claude.json`.
+
+**Alternative: the `claude mcp add` CLI**, for `~/.claude.json`-based registration instead of a
+file in the repo:
+
 ```bash
 claude mcp add --scope project control-center -- node <this-install's-out>/mcpServer.js
 ```
 
-Don't hand-type the path — run **"Agent Control Center: Copy MCP Registration Command"** from the
-Command Palette (or use the walkthrough's button for it) to get the exact command for *this*
-install copied to your clipboard. It's computed from where the extension actually is
-(`context.extensionUri`), which differs between an `F5` dev checkout and an installed `.vsix` — a
-path hardcoded here would only ever be right for one of them.
+Run **"Agent Control Center: Copy MCP Registration Command"** to get the exact command for *this*
+install on your clipboard rather than typing the path by hand. `--scope project` registers it for
+sessions run from the current project only; use `--scope user` instead for every project on this
+machine.
 
-`--scope project` registers it for sessions run from the current project only; use `--scope user`
-instead for every project on this machine. Verify with `claude mcp list` (should show
-`control-center — ✔ Connected`). Registering doesn't reach sessions already running — MCP servers
-load at session start, not hot-reloaded into one already open, so an existing session needs to be
-restarted before it'll see this tool.
-
-(Hand-editing `~/.claude.json`'s `mcpServers` key directly works too, in principle, but it's Claude
-Code's own live state file — rewritten by every running session for history/settings/etc. —
-so `claude mcp add` is the safer path, not just the more convenient one.)
+Either way, verify with `claude mcp list` (should show `control-center — ✔ Connected`).
+Registering doesn't reach sessions already running — MCP servers load at session start, not
+hot-reloaded into one already open, so an existing session needs to be restarted before it'll see
+this tool.
 
 (Add `--db <path>` if you're not using the default `~/.control-center/control-center.db`.)
