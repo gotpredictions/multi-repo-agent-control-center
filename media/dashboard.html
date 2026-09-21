@@ -24,20 +24,49 @@
 // rendered fine.
 (function () {
   var shown = false;
-  function showFallback(detail) {
+  // Getting a real error out of this page's own devtools console turned out
+  // to be genuinely hard in practice — VS Code webviews are nested,
+  // cross-origin iframes, and reaching the right one to even run
+  // `document.scripts` took several rounds of guessing. So in addition to
+  // the visible banner, report full error details over the SAME
+  // postMessage channel every other action in this page already uses
+  // (dispatch, escalation answers, …) straight to the extension's own
+  // Output channel — no devtools navigation required to see it.
+  var vscodeApi = window.__ccVsCodeApi || (typeof acquireVsCodeApi === 'function'
+    ? (window.__ccVsCodeApi = acquireVsCodeApi())
+    : null);
+  function reportHome(detail) {
+    if (!vscodeApi) return;
+    try { vscodeApi.postMessage({ type: 'clientError', detail: detail }); } catch (e) { /* best effort */ }
+  }
+  function showFallback(summary, detail) {
     if (shown) return;
     shown = true;
     var el = document.createElement('div');
     el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#5a1d1d;color:#f8d7da;'
       + 'font:12px system-ui,sans-serif;padding:10px 14px;border-bottom:1px solid #f14c4c;white-space:pre-wrap;';
-    el.textContent = 'Agent Control Center failed to load (' + detail + '). '
-      + 'Try "Developer: Reload Window", then "Developer: Open Webview Developer Tools" '
-      + 'for the full error if it happens again.';
+    el.textContent = 'Agent Control Center failed to load (' + summary + '). '
+      + 'Full details were sent to the "Agent Control Center" Output channel — '
+      + 'Cmd+Shift+P -> "View: Toggle Output" and pick it from the dropdown.';
     document.body.insertBefore(el, document.body.firstChild);
+    reportHome(detail);
   }
-  window.addEventListener('error', function (e) { showFallback(e.message || 'unknown error'); });
+  window.addEventListener('error', function (e) {
+    var loc = 'line ' + e.lineno + ', col ' + e.colno + ' of ' + (e.filename || location.href);
+    var around = '';
+    try {
+      var html = document.documentElement.outerHTML;
+      var c = typeof e.colno === 'number' ? e.colno : -1;
+      if (c > 0) around = '\ncontext: ' + JSON.stringify(html.slice(Math.max(0, c - 150), c + 150));
+    } catch (ignored) {}
+    var detail = (e.message || 'unknown error') + ' at ' + loc
+      + (e.error && e.error.stack ? '\nstack: ' + e.error.stack : '') + around;
+    showFallback(e.message || 'unknown error', detail);
+  });
   window.addEventListener('unhandledrejection', function (e) {
-    showFallback((e.reason && (e.reason.message || String(e.reason))) || 'unhandled rejection');
+    var msg = (e.reason && (e.reason.message || String(e.reason))) || 'unhandled rejection';
+    var detail = msg + (e.reason && e.reason.stack ? '\nstack: ' + e.reason.stack : '');
+    showFallback(msg, detail);
   });
 })();
 </script>

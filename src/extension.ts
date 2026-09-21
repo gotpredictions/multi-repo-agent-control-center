@@ -418,6 +418,20 @@ export function activate(context: vscode.ExtensionContext) {
             if (repo?.escalation) await answerEscalation(msg.repoId, repo.escalation);
             break;
           }
+          case "clientError":
+            // Sent by dashboard.html's own top-level window.onerror/
+            // unhandledrejection handler — the one thing that's supposed to
+            // fire even when the rest of the page crashed on load. This
+            // exists because getting a real error out of a webview's own
+            // devtools console turned out to be genuinely hard in practice
+            // (nested, cross-origin iframes that plain `document.scripts`
+            // inspection from the workbench console can't reach) — this
+            // sidesteps all of that by reusing the same postMessage channel
+            // every other webview action already goes through, straight
+            // into this extension's own Output channel instead.
+            out.appendLine(`[webview error] ${msg.detail}`);
+            out.show(true);
+            break;
           default:
             out.appendLine(`unknown webview message: ${JSON.stringify(msg)}`);
         }
