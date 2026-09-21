@@ -555,6 +555,8 @@ class Component extends DCLogic {
     // Temporary debug instrumentation — see window.__ccLog's own comment.
     if (window.__ccLog) {
       window.__ccLog('Component constructed, t=' + Date.now());
+      var srcTags = [...document.querySelectorAll('script[src]')].map(function (s) { return s.getAttribute('src'); });
+      window.__ccLog('script[src] tags in DOM (' + srcTags.length + '): ' + JSON.stringify(srcTags));
       document.addEventListener('visibilitychange', function () {
         window.__ccLog('visibilitychange -> ' + document.visibilityState + ', t=' + Date.now());
       });
