@@ -201,6 +201,43 @@ Plan-list or Findings tab's table markup reverts to a literal `table`/`tr`/`td` 
 part of `npm run package`, so packaging a regression on any of it fails loudly instead of shipping
 quietly.
 
+## Considered, not built: an in-process coordinator
+
+Cruise control (above) has a real ceiling: confirmed this session, not assumed. MCP is pull-only
+from a coordinator's side, and Claude Code's own client doesn't close that gap — verified directly
+against two Claude Code GitHub issues, not just the abstract protocol spec. [#7252](https://github.com/anthropics/claude-code/issues/7252)
+(closed, `NOT_PLANNED`) is a developer who built a subscribable MCP resource and reported "Claude
+Code never updated its context"; Claude Code's client never issues `resources/subscribe` at all,
+so a server pushing `notifications/resources/updated` has nothing listening on the other end.
+[#51713](https://github.com/anthropics/claude-code/issues/51713) confirms MCP tool calls are
+UI-collapsed with no visible mid-call streaming even when a server sends `notifications/progress`.
+And structurally, `tools/call` is one request → one final result — there's no protocol-level way
+for a single tool's own output to keep arriving in pieces after the model already has a response.
+So cruise control's `cruiseControlNote` (a reminder embedded in every `dispatch` result) really is
+the ceiling of what's reachable this way — strong hints in a tool result, not a real push.
+
+The one design that would actually close the gap: run the coordinator itself as another `query()`
+loop inside this same daemon — the same pattern `agentRunner.ts` already uses for repo agents —
+with its own SDK-native tools (the same set MCP exposes today: `dispatch`, `resolve_escalation`,
+`set_requirement_phase`, …) and a chat panel in the dashboard instead of a separate interactive
+CLI session connecting over MCP. Two real merits beyond just solving push: (1) genuine event-driven
+resumption — the daemon already has `db.onChange()` wired up for its own polling, so a dispatch
+landing or an escalation resolving could directly trigger a fresh coordinator turn seeded with
+"here's what just happened," rather than waiting on a human's separate session to poll; (2) a
+system prompt we fully own and pass directly to `query()`, immune to the same truncation risk
+`get_methodology` was built to route around (`instructions` strings from an MCP server can be
+truncated by the client before reaching the model — a tool call can't be silently dropped the same
+way, but a system prompt we control outright doesn't need that workaround at all) and not
+competing for authority with whatever system prompt/CLAUDE.md an external interactive session
+already has loaded.
+
+Parked, not pursued: the real cost is everything an embedded webview chat would have to
+reimplement to get back to where the actual Claude Code CLI/extension already is today — diff
+rendering, checkpoints, permission UX, todo tracking, and the rest of that polished interactive
+surface. MCP + an external interactive coordinator session gets all of that for free; this
+wouldn't, unless rebuilt by hand. Worth revisiting if cruise control's ceiling turns out to matter
+in practice, not before.
+
 ## Known limitations (v1, ad hoc)
 
 - "Dispatch now" vs "queue" both land as an ordinary FIFO-queued dispatch; there's no queue-jump
