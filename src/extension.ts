@@ -407,7 +407,18 @@ export function activate(context: vscode.ExtensionContext) {
     // step, before any await, closes the window entirely — a second
     // overlapping call now sees isFirstRender === false immediately, no
     // race possible regardless of how the two calls interleave afterward.
-    const isFirstRender = !panelInitialized;
+    //
+    // Gated on `panel` existing too, not just `!panelInitialized` — a real
+    // bug otherwise: pickDatabaseThenOpenDashboard calls switchDatabase()
+    // (which calls this) BEFORE openDashboard has created the panel at
+    // all, so that call would see panel === undefined, hit `if (!panel)
+    // return` below, but had ALREADY claimed the first-render flag on its
+    // way there. openDashboard's own syncFromDaemon() call right after
+    // creating the panel then found panelInitialized already true and
+    // took the postMessage branch instead of ever assigning
+    // panel.webview.html — a permanently blank panel, confirmed live (the
+    // window showed the panel opening but never rendering anything).
+    const isFirstRender = !!panel && !panelInitialized;
     if (isFirstRender) panelInitialized = true;
     await runner.ready;
     const [snapshot, { databases }] = await Promise.all([runner.call("snapshot"), runner.call("listDatabases")]);
