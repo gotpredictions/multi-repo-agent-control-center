@@ -798,12 +798,48 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  // A permanent status bar entry so opening the dashboard (the thing
+  // that's actually needed constantly) never requires the Command Palette
+  // at all — clicking it goes straight there, same as the command. A
+  // right-click-style "give me the other commands too" QuickPick lives
+  // behind a second, narrower click target next to it (this extension's
+  // other commands — restart, reset, MCP registration — are rare enough
+  // that they don't each need their own permanent status bar real estate).
+  const dashboardStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  dashboardStatusBarItem.text = "$(circuit-board) Control Center";
+  dashboardStatusBarItem.tooltip = "Open Agent Control Center dashboard";
+  dashboardStatusBarItem.command = "multiRepoAgentControlCenter.openDashboard";
+  dashboardStatusBarItem.show();
+
+  const moreStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+  moreStatusBarItem.text = "$(chevron-down)";
+  moreStatusBarItem.tooltip = "Agent Control Center: more commands";
+  moreStatusBarItem.command = "multiRepoAgentControlCenter.quickMenu";
+  moreStatusBarItem.show();
+
+  const quickMenu = vscode.commands.registerCommand("multiRepoAgentControlCenter.quickMenu", async () => {
+    const picked = await vscode.window.showQuickPick(
+      [
+        { label: "$(browser) Open Dashboard", command: "multiRepoAgentControlCenter.openDashboard" },
+        { label: "$(refresh) Restart Runner", command: "multiRepoAgentControlCenter.restartRunner" },
+        { label: "$(link) Copy MCP Registration Command", command: "multiRepoAgentControlCenter.copyMcpRegistrationCommand" },
+        { label: "$(new-file) Create .mcp.json", command: "multiRepoAgentControlCenter.createMcpJson" },
+        { label: "$(trash) Reset All Data", command: "multiRepoAgentControlCenter.resetAllData" },
+      ],
+      { placeHolder: "Agent Control Center" }
+    );
+    if (picked) await vscode.commands.executeCommand(picked.command);
+  });
+
   context.subscriptions.push(
     openDashboard,
     restartRunner,
     resetAllData,
     copyMcpRegistrationCommand,
     createMcpJson,
+    quickMenu,
+    dashboardStatusBarItem,
+    moreStatusBarItem,
     { dispose: () => runner.dispose() },
     { dispose: () => repoChannels.forEach((ch) => ch.dispose()) },
     out

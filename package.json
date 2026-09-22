@@ -42,6 +42,10 @@
       {
         "command": "multiRepoAgentControlCenter.createMcpJson",
         "title": "Agent Control Center: Create .mcp.json"
+      },
+      {
+        "command": "multiRepoAgentControlCenter.quickMenu",
+        "title": "Agent Control Center: Quick Menu"
       }
     ],
     "configuration": {

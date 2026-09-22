@@ -425,6 +425,13 @@ Then `F5` in VS Code to launch an Extension Development Host, and run
 you'll be asked how to populate it (sibling scan, GitHub discovery, or skip) — nothing runs
 without you choosing it.
 
+A permanent **`$(circuit-board) Control Center`** status bar item (bottom left) opens the dashboard
+directly, without going through the palette at all — it's the one command actually needed
+constantly, so it gets a permanent click target. The narrower **⌄** item right next to it opens a
+QuickPick for the other four commands (Restart Runner, Copy MCP Registration Command, Create
+.mcp.json, Reset All Data), which stay palette-adjacent rather than each getting their own status
+bar slot, since they're needed far less often.
+
 Discovered repos start `stopped` (deliberately — nothing runs real Agent SDK sessions against real
 repos until you explicitly start one from the dot menu, which also queues that repo's first
 `summary` pass). Queue a dispatch, start the agent, and watch its output in the
