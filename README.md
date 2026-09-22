@@ -28,7 +28,8 @@ different ids are fully isolated files:
   process against the same `Db` map the dashboard reads, writes from an MCP session show up in the
   dashboard live via the daemon's own `update` push — no separate polling workaround needed for that.
 - **`src/extension.ts`** — the VS Code host. Renders `media/dashboard.html` in a webview for the
-  repo table/plan/findings/log tabs (injecting a snapshot as `window.__CC_BOOTSTRAP__`, then
+  requirements/plan/repos/findings/log/learnings tabs (injecting a snapshot as
+  `window.__CC_BOOTSTRAP__`, then
   `postMessage`-ing updates into the still-loaded page rather than re-rendering the whole thing —
   see the note on that below). The per-repo tagged message stream and escalation-answering are
   deliberately *not* in the webview: each repo gets a real `vscode.OutputChannel` for its log, and
@@ -108,8 +109,7 @@ own design conversation for why):
   made autonomously, via a Dispute button on each row. Any disputed finding for the current
   requirement blocks the Plan → Implement gate until a human un-disputes it from the dashboard —
   deliberately NOT linked to a specific checklist item or task (findings aren't tied to task/
-  checklist ids at all — the checklist itself is a purely internal discipline mechanism, never
-  surfaced in the dashboard except the one exception below).
+  checklist ids at all — see the Requirements tab below for where the checklist itself is shown).
 
 **No per-repo lifecycle field.** Critique → plan → implement → close → done is a real, useful
 discipline (see the MCP server's own instructions for the full framing), but it describes a
@@ -209,19 +209,18 @@ the same params again — it just reports the same hold. `get_requirement_phase`
 `operatorGateEnabled`/`operatorGatePending` fields are how a coordinator can tell it's genuinely
 stuck here rather than something else blocking `dispatch`.
 
-**The checklist stays internal, with one narrow exception.** Completing Critique means breaking the
-requirement into a checklist (`set_requirement_phase({phase:'plan', checklist:[...]})`) — what
-Implement's gate later checks every task against (`upsert_task`'s `covers`) — but the checklist
-itself is never rendered in the dashboard as a list; it's an internal discipline mechanism for the
-coordinator, not something a human is expected to review line by line. The one exception: a
-checklist item can be marked `ambiguous: true` ("a plausible different reader could land on a
-different interpretation than the one I'm about to pick"), and every ambiguous item needs its own
+**The checklist gets its own Requirements tab, shown before Plan.** Completing Critique means
+breaking the requirement into a checklist (`set_requirement_phase({phase:'plan', checklist:[...]})`)
+— what Implement's gate later checks every task against (`upsert_task`'s `covers`) — and the
+dashboard's Requirements tab (first in the tab order, ahead of Plan) renders it read-only: one row
+per item, no click handlers, since it's meant to be a faithful record of the coordinator's own
+judgment call rather than something a human edits around. A checklist item can be marked
+`ambiguous: true` ("a plausible different reader could land on a different interpretation than the
+one I'm about to pick") — badged in the Requirements tab — and every ambiguous item needs its own
 `add_finding({waitingOnHuman: true})` recording the interpretation picked, before Critique's gate
 lets Plan proceed — checked as a count (N ambiguous items need ≥N `waitingOnHuman` findings for this
-requirement), not a real per-item link. Ambiguous items' *text* (not the rest of the checklist) gets
-a minimal banner in the dashboard header, right where the operator-gate banner shows — a human can
-see what was flagged before treating Plan as settled, without the checklist becoming a general-
-purpose dashboard feature.
+requirement), not a real per-item link, so it catches "you flagged 2 ambiguous items but logged 0
+waitingOnHuman findings," not "you resolved the wrong one."
 
 **Task evidence.** `upsert_task`/`upsert_tasks` take an optional `doneEvidence` string — the actual
 evidence a task was verified against (test output, a commit SHA, a PR link) — shown in the existing

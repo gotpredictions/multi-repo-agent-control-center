@@ -188,14 +188,14 @@ function toBootstrap(snapshot: any, databases: any[], currentDbId: string) {
     createdAt: l.created_at,
   }));
 
-  // Deliberately filtered here, not just in the dashboard's own render
-  // logic — the checklist stays internal (see ChecklistItem's own
-  // comment); only the narrow "ambiguous items need a human's eyes before
-  // Plan completes" surface reaches the webview at all, never the full
-  // list, even if a future dashboard change forgets to filter client-side.
-  const checklist = (snapshot.checklist || [])
-    .filter((c: any) => !!c.ambiguous)
-    .map((c: any) => ({ id: c.id, text: truncateForEmbed(c.text) }));
+  // The full checklist, shown read-only in the dashboard's Requirements
+  // tab (see ChecklistItem's own comment for why it's coordinator-written,
+  // not dashboard-editable).
+  const checklist = (snapshot.checklist || []).map((c: any) => ({
+    id: c.id,
+    text: truncateForEmbed(c.text),
+    ambiguous: !!c.ambiguous,
+  }));
 
   return {
     repos,

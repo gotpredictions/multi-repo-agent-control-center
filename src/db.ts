@@ -163,9 +163,8 @@ export interface Task {
 // structural check: it catches a requirement item nobody ever wrote a
 // task for, not a task that nominally covers a bullet but implements it
 // shallowly (that class of gap is Closing's job, via the end-to-end
-// finding). Deliberately never surfaced in the dashboard as a general
-// list (it's an internal discipline mechanism, not a feature) — the one
-// exception is `ambiguous` items specifically, shown narrowly so a human
+// finding). Shown read-only in the dashboard's Requirements tab, before
+// Plan — `ambiguous` items are badged there specifically, so a human
 // knows to expect a waitingOnHuman finding resolving each one before
 // Plan completes (see mcp.ts's set_requirement_phase).
 export interface ChecklistItem {
