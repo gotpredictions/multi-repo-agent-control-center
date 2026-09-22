@@ -35,6 +35,21 @@ different ids are fully isolated files:
   a new escalation shows a native notification with an "Answer" action that opens
   `showQuickPick`/`showInputBox` — genuine VS Code UI, not a webview panel imitating one.
 
+**A daemon can hold many databases at once, not just one.** `dbId` isn't a per-install constant —
+`list_databases` (MCP) returns every id the daemon currently knows about, each with its own
+requirement phase/title/summary and repo count so a coordinator can tell them apart without
+switching into each one blind, and `select_database({dbId})` switches which one the *rest of that
+session's* tool calls operate on (creating it empty first, if the id is new). The dashboard has the
+same thing as a header dropdown, plus **+**/**–** buttons to create a new empty database or delete
+the current one (`createDatabase`/`deleteDatabase`, both daemon-side, the delete gated behind a
+modal confirmation). An id that only ever existed in memory (opened, not yet flushed to disk) still
+shows up in `list_databases`/the dropdown — `listDatabases()` unions the storage directory's actual
+`.db` files with whatever's currently open. Whichever dbId a repo's `agent_status` shows `running`
+in gets reconciled back to `idle` the first time that dbId is opened by a fresh daemon process, not
+just once at overall daemon startup — a crash (or a forced quit, or the machine sleeping mid-
+dispatch) can otherwise leave a green "running" dot with no real process behind it, indefinitely,
+for a database that only gets opened well after the daemon itself restarted.
+
 **No push notification reaches an MCP-connected coordinator session.** `dispatch` returns as soon
 as the work is *queued*, not when it's done — real work can take minutes. The VS Code extension's
 native notifications (escalations) only reach the human at the keyboard; a coordinator has no
@@ -125,6 +140,38 @@ result lands in `repos.summary`, surfaced by `list_repos`/`get_repo_status`. Ref
 via `refresh_repo_summary`. Verified end-to-end against a real repo — the summary correctly flagged
 one as half-bootstrapped template scaffolding before any real dispatch hit that surprise.
 
+**Pull requests are tracked automatically, not self-reported.** The Agent SDK's own Bash tool result
+carries a structured `gitOperation` classification of git/gh activity it detected in that exact
+command (`agentRunner.ts` reads it straight off the SDK message stream) — a far more reliable signal
+than trusting the model to mention a PR it opened, or polling `gh pr list` after the fact: it needs
+no cooperation from the model, and it's scoped to commands *this dispatch* actually ran, so a PR
+that already existed (opened by a human, or before this tool ever tracked the repo) is never
+misattributed. Only actions that actually move a PR between lifecycle states are recorded —
+`created`/`reopened`/`ready` all mean "open" (a draft going ready-for-review is still open),
+`merged`/`closed` are the terminal states — keyed by `(repo, number)` so a later status for the same
+PR updates it in place. Shown as a dot per repo row in the Repos tab (open/merged/closed, see the
+dot legend there) and in `list_repos`/`get_repo_status`'s `pullRequests` field.
+
+**A dispatch's live progress, not just its final response.** Previously only the very last text
+block of a run was captured (into the dispatch's eventual response, written once the whole thing
+completes) — the repo's Output channel showed tool calls happening but nothing of the agent's own
+reasoning/commentary in between, while a long-running dispatch was still in progress. Every text
+block the model produces mid-run now also gets a live `appendLog` line (capped at 300 characters —
+a progress indicator, not a replacement for the full response still stored via
+`setDispatchResponse` once the run actually finishes).
+
+**Learnings — a per-requirement retrospective, collected automatically at Done.** Completing the
+requirement (`set_requirement_phase({phase:'done', lessons, decisionsToRecord,
+futureImprovements})`) records the coordinator's own structured retrospective, and as a side effect
+of that same transition succeeding, queues one final "what did you learn" dispatch to every runnable
+repo (queue-jumping, same as the `intro` dispatch) — each repo's own free-form answer lands in the
+same Learnings tab as the coordinator's structured entry, then that repo's agent is stopped rather
+than left idle (Done means the requirement is genuinely finished, not paused). A repo with no local
+clone can't run a dispatch at all, so it's stopped directly instead of queuing something that would
+sit forever. The dashboard's Learnings tab renders the coordinator's entry with three labeled
+sections (Lessons / Decisions to record / Future improvements) and each repo's own report as
+free-form prose, distinguished by whether `lessons`/`decisions`/`futureImprovements` are present.
+
 **Repo agents prefer whatever `claude` is already on `PATH`, not the Agent SDK's bundled copy.**
 `query()` defaults to the SDK's own bundled native binary — one of 8 per-platform
 `optionalDependencies` (`@anthropic-ai/claude-agent-sdk-<platform>`, ~200MB each) — unless
@@ -149,6 +196,18 @@ after actually running this lifecycle once (not paraphrased — see that file if
 the source of truth on what each gate requires). Single-slot by design: one requirement in flight at
 a time as tracked here, not a queue of many; starting a new one means explicitly resetting the phase
 back to `critique`, since it doesn't reset itself.
+
+**Operator gate — an optional, dashboard-only hold between Plan and Implement.** Off by default; a
+header toggle (`Operator gate: On/Off`, `meta` key `operator_gate_enabled`) flips it, same "only a
+human decides this" pattern as finding disputes above — no MCP tool sets it. When it's on and
+`set_requirement_phase({phase:'implement'})` would otherwise succeed (every other Plan gate already
+satisfied), the phase change is instead HELD — `operator_gate_pending` goes `on`, the call returns
+`held: true` rather than an error, and `dispatch` itself refuses to run until a human clicks
+**Approve → Implement** in a dashboard banner (a modal confirmation first, since it starts real work
+dispatching to repos). A retried `set_requirement_phase` call while already held doesn't re-demand
+the same params again — it just reports the same hold. `get_requirement_phase`'s
+`operatorGateEnabled`/`operatorGatePending` fields are how a coordinator can tell it's genuinely
+stuck here rather than something else blocking `dispatch`.
 
 **The checklist stays internal, with one narrow exception.** Completing Critique means breaking the
 requirement into a checklist (`set_requirement_phase({phase:'plan', checklist:[...]})`) — what
@@ -377,7 +436,15 @@ shows up as a VS Code notification with an "Answer" action.
 
 No process to spawn — the daemon hosts the MCP endpoint itself over HTTP on a loopback port, so
 registration is just a URL (`http://127.0.0.1:<port>/mcp?dbId=<id>`), fetched fresh each time from
-the daemon (the port is only known once its HTTP listener is actually up). Two options:
+the daemon (the port is only known once its HTTP listener is actually up). The port itself is
+persisted, not re-randomized every restart: the first time the extension ever sees the daemon's
+actual port, it's written into the `multiRepoAgentControlCenter.daemonPort` VS Code setting, and
+every subsequent daemon start is asked to reuse exactly that port (`--http-port`) — otherwise a
+fresh random port on every restart would silently invalidate every already-registered `.mcp.json`
+and `~/.claude.json` entry. A real conflict (something else now holds that port) surfaces as an
+actual VS Code error with an "Open Settings" action, not a registration command that silently points
+at a dead endpoint; change the setting yourself and restart the runner if that happens. Two options
+for actually registering:
 
 **Simpler: a `.mcp.json` file.** Run **"Agent Control Center: Create .mcp.json"** from the Command
 Palette (or the walkthrough's button). Writes/merges a `control-center` entry
