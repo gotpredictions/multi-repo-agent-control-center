@@ -1,0 +1,65 @@
+name: Release
+
+# Triggered by pushing a tag matching v*.*.* (e.g. v0.0.27) — not by every
+# push to main, since not every commit here is meant to ship a release
+# (this repo's whole history so far has been direct commits to main, only
+# tagged/released when a version is actually meant to go out). Pushing the
+# tag is the deliberate "release this" signal; this workflow's only job is
+# to build and publish once that signal happens, the same way the manual
+# `npm run package` + `gh release create` steps did by hand until now.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # engines.node requires >=22.5.0 for node:sqlite — pin to a specific
+      # patch known to satisfy that instead of trusting setup-node's "22"
+      # floating tag to always resolve above the .5.0 floor.
+      - name: Verify Node version satisfies engines.node
+        run: |
+          node -e "
+            const { engines } = require('./package.json');
+            const [maj, min] = process.versions.node.split('.').map(Number);
+            if (maj < 22 || (maj === 22 && min < 5)) {
+              console.error('Node ' + process.versions.node + ' does not satisfy engines.node: ' + engines.node);
+              process.exit(1);
+            }
+          "
+
+      - run: npm ci
+
+      # npm run package already runs compile + check (the dashboard layout
+      # regression checks) before vsce package — same gate this repo's own
+      # commits have been held to by hand throughout its history, now
+      # enforced in CI instead of relying on someone remembering to run it.
+      - name: Compile, check, and package the extension
+        run: npm run package
+
+      - name: Verify the tag matches package.json's version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -e "console.log(require('./package.json').version)")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME (version $TAG_VERSION) does not match package.json's version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Create the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: control-center.vsix
+          generate_release_notes: true
+          name: "${{ github.ref_name }} — Multi-Repo Agent Control Center"
