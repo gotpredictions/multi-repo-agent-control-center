@@ -386,6 +386,57 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }
 
+  // One status bar item per non-Done database, up to this many — beyond
+  // that, "Switch Database…" behind the chevron (moreStatusBarItem/
+  // quickMenu below) is how the rest stay reachable. A Done requirement's
+  // database is the one you'd go looking for on purpose, not something
+  // that should compete for a permanent, always-visible click target.
+  const MAX_DB_STATUS_ITEMS = 3;
+  const dbStatusBarItems: vscode.StatusBarItem[] = [];
+  for (let i = 0; i < MAX_DB_STATUS_ITEMS; i++) {
+    dbStatusBarItems.push(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 103 - i));
+  }
+
+  // Called from syncFromDaemon (below) with the same `databases` it just
+  // fetched — no extra daemon round trip just to keep these current.
+  // Recomputed on every daemon update (dispatch sent/responded, a
+  // set_requirement_phase landing, etc.), not just at activation, so a
+  // requirement reaching Done drops its button here the moment that
+  // actually happens rather than on next reload.
+  function refreshDbStatusBarItems(databases: any[]) {
+    const active = (databases || []).filter((d) => d.requirementPhase !== "done");
+    if (active.length === 0) {
+      // Nothing to distinguish between — fall back to one plain item that
+      // just opens the dashboard on whatever's currently selected, same
+      // as before per-database items existed at all.
+      const item = dbStatusBarItems[0];
+      item.text = "$(circuit-board) Control Center";
+      item.tooltip = "Open Agent Control Center dashboard";
+      item.command = "multiRepoAgentControlCenter.openDashboard";
+      item.show();
+      for (let i = 1; i < dbStatusBarItems.length; i++) dbStatusBarItems[i].hide();
+      return;
+    }
+    const shown = active.slice(0, MAX_DB_STATUS_ITEMS);
+    shown.forEach((d, i) => {
+      const item = dbStatusBarItems[i];
+      const bits: string[] = [];
+      if (d.requirementTitle) bits.push(d.requirementTitle);
+      bits.push(d.requirementPhase ? `(${d.requirementPhase})` : "(no requirement set)");
+      bits.push(d.repoCount === 1 ? "1 repo" : `${d.repoCount} repos`);
+      item.text = (d.id === selectedDbId ? "$(circuit-board) $(check) " : "$(circuit-board) ") + d.id;
+      item.tooltip = `${d.id} — ${bits.join(" · ")}\n${d.requirementSummary || "No summary yet — set on completing Critique."}\n\nClick to open the dashboard focused on this database.`;
+      item.command = { title: "Open", command: "multiRepoAgentControlCenter.openDashboardForDb", arguments: [d.id] };
+      item.show();
+    });
+    for (let i = shown.length; i < dbStatusBarItems.length; i++) dbStatusBarItems[i].hide();
+  }
+
+  async function openDashboardForDb(dbId: string): Promise<void> {
+    if (dbId !== selectedDbId) await switchDatabase(dbId);
+    await vscode.commands.executeCommand("multiRepoAgentControlCenter.openDashboard");
+  }
+
   async function syncFromDaemon() {
     // Claiming "I'm the first render" has to happen synchronously, before
     // the first await below — not after, which is where it lived until a
@@ -424,6 +475,7 @@ export function activate(context: vscode.ExtensionContext) {
     const [snapshot, { databases }] = await Promise.all([runner.call("snapshot"), runner.call("listDatabases")]);
     tailLogsToOutputChannels(snapshot);
     notifyNewEscalations(snapshot);
+    refreshDbStatusBarItems(databases);
     if (!panel) return;
     const bootstrap = toBootstrap(snapshot, databases, selectedDbId);
     if (isFirstRender) {
@@ -530,6 +582,11 @@ export function activate(context: vscode.ExtensionContext) {
       syncFromDaemon().catch((err) => out.appendLine(`sync failed: ${err?.message ?? err}`));
     });
     r.ready.then(() => syncHttpPortSetting(r)).catch(() => {});
+    // Populates the per-database status bar items right away — otherwise
+    // they'd stay empty/hidden until either the dashboard is opened once
+    // (which is exactly what they're meant to let you avoid doing blind)
+    // or the daemon happens to fire its first onUpdate event.
+    r.ready.then(() => syncFromDaemon()).catch((err) => out.appendLine(`initial sync failed: ${err?.message ?? err}`));
     return r;
   }
 
@@ -846,21 +903,20 @@ export function activate(context: vscode.ExtensionContext) {
     pickDatabaseThenOpenDashboard
   );
 
-  // A permanent status bar entry so opening the dashboard (the thing
-  // that's actually needed constantly) never requires the Command Palette
-  // at all — clicking it goes straight there (via pickDatabaseThenOpenDashboard,
-  // which only actually asks "which database?" when there's more than one
-  // to choose from — see its own comment). A right-click-style "give me
-  // the other commands too" QuickPick lives behind a second, narrower
-  // click target next to it (this extension's other commands — restart,
-  // reset, MCP registration — are rare enough that they don't each need
-  // their own permanent status bar real estate).
-  const dashboardStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  dashboardStatusBarItem.text = "$(circuit-board) Control Center";
-  dashboardStatusBarItem.tooltip = "Open Agent Control Center dashboard (asks which database first, if more than one is tracked)";
-  dashboardStatusBarItem.command = "multiRepoAgentControlCenter.pickDatabase";
-  dashboardStatusBarItem.show();
+  const openDashboardForDbCmd = vscode.commands.registerCommand(
+    "multiRepoAgentControlCenter.openDashboardForDb",
+    openDashboardForDb
+  );
 
+  // The permanent, always-visible click targets are the per-database
+  // items themselves (dbStatusBarItems, populated by refreshDbStatusBarItems
+  // above/in syncFromDaemon) — one per non-Done database, so opening the
+  // dashboard focused on a specific one never requires the Command Palette.
+  // A right-click-style "give me the other commands too" QuickPick lives
+  // behind a narrower chevron item next to them (this extension's other
+  // commands — restart, reset, MCP registration, switching to a Done
+  // database — are rare enough that they don't each need their own
+  // permanent status bar real estate).
   const moreStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
   moreStatusBarItem.text = "$(chevron-down)";
   moreStatusBarItem.tooltip = "Agent Control Center: more commands";
@@ -889,8 +945,9 @@ export function activate(context: vscode.ExtensionContext) {
     copyMcpRegistrationCommand,
     createMcpJson,
     pickDatabase,
+    openDashboardForDbCmd,
     quickMenu,
-    dashboardStatusBarItem,
+    ...dbStatusBarItems,
     moreStatusBarItem,
     { dispose: () => runner.dispose() },
     { dispose: () => repoChannels.forEach((ch) => ch.dispose()) },

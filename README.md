@@ -425,16 +425,19 @@ Then `F5` in VS Code to launch an Extension Development Host, and run
 you'll be asked how to populate it (sibling scan, GitHub discovery, or skip) — nothing runs
 without you choosing it.
 
-A permanent **`$(circuit-board) Control Center`** status bar item (bottom left) opens the dashboard
-directly, without going through the palette at all — it's the one command actually needed
-constantly, so it gets a permanent click target. With only one database tracked (the common case)
-it jumps straight there; with two or more, it asks which one first via a QuickPick (each showing its
-requirement title/phase/repo count, same info as the dashboard's own database dropdown tooltip) —
-"which database" only becomes a real question once there's more than one, so that's exactly when
-this starts asking rather than adding a step to every click regardless. The narrower **⌄** item
-right next to it opens a QuickPick for the less-frequent commands (Switch Database, Restart Runner,
-Copy MCP Registration Command, Create .mcp.json, Reset All Data), which stay palette-adjacent rather
-than each getting their own status bar slot.
+One permanent **`$(circuit-board) <dbId>`** status bar item per database not at requirement phase
+`done` (bottom left, up to 3) opens the dashboard focused directly on that one — no palette, no
+picking from a list first, since a click already says which database you mean. Recomputed on every
+daemon update (a dispatch landing, `set_requirement_phase` completing, …), not just at activation or
+on reload, straight off the same `listDatabases` call `syncFromDaemon` already makes for the
+dashboard itself — a database reaching Done drops its item the moment that transition actually
+lands. The currently-focused one gets a `$(check)` in its label. With zero non-Done databases (a
+fresh install, or everything tracked so far is finished) this collapses to one plain
+`$(circuit-board) Control Center` item that just opens the dashboard on whatever's currently
+selected. Beyond 3, or to reach a Done database on purpose, the narrower **⌄** item next to them
+opens a QuickPick for the less-frequent path: **Switch Database…** (lists every database,
+Done included) plus Restart Runner, Copy MCP Registration Command, Create .mcp.json, Reset All
+Data — commands rare enough that they don't each need their own permanent status bar slot.
 
 Discovered repos start `stopped` (deliberately — nothing runs real Agent SDK sessions against real
 repos until you explicitly start one from the dot menu, which also queues that repo's first
