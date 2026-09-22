@@ -46,6 +46,10 @@
       {
         "command": "multiRepoAgentControlCenter.quickMenu",
         "title": "Agent Control Center: Quick Menu"
+      },
+      {
+        "command": "multiRepoAgentControlCenter.pickDatabase",
+        "title": "Agent Control Center: Switch Database"
       }
     ],
     "configuration": {

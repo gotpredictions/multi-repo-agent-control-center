@@ -427,10 +427,14 @@ without you choosing it.
 
 A permanent **`$(circuit-board) Control Center`** status bar item (bottom left) opens the dashboard
 directly, without going through the palette at all — it's the one command actually needed
-constantly, so it gets a permanent click target. The narrower **⌄** item right next to it opens a
-QuickPick for the other four commands (Restart Runner, Copy MCP Registration Command, Create
-.mcp.json, Reset All Data), which stay palette-adjacent rather than each getting their own status
-bar slot, since they're needed far less often.
+constantly, so it gets a permanent click target. With only one database tracked (the common case)
+it jumps straight there; with two or more, it asks which one first via a QuickPick (each showing its
+requirement title/phase/repo count, same info as the dashboard's own database dropdown tooltip) —
+"which database" only becomes a real question once there's more than one, so that's exactly when
+this starts asking rather than adding a step to every click regardless. The narrower **⌄** item
+right next to it opens a QuickPick for the less-frequent commands (Switch Database, Restart Runner,
+Copy MCP Registration Command, Create .mcp.json, Reset All Data), which stay palette-adjacent rather
+than each getting their own status bar slot.
 
 Discovered repos start `stopped` (deliberately — nothing runs real Agent SDK sessions against real
 repos until you explicitly start one from the dot menu, which also queues that repo's first

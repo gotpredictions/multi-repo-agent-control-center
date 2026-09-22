@@ -444,6 +444,46 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage(`Agent Control Center data cleared for "${dbId}".`);
   }
 
+  // Shared by the dashboard's own database dropdown (switchDatabase webview
+  // message) and the status bar's "pick a database" flow below — same
+  // state update, same resync, regardless of which UI surface triggered it.
+  async function switchDatabase(dbId: string): Promise<void> {
+    selectedDbId = dbId;
+    await context.globalState.update(SELECTED_DB_KEY, dbId);
+    runner.dbId = dbId;
+    await syncFromDaemon();
+  }
+
+  // Bound to the status bar's main "Control Center" click (see below,
+  // replacing a plain openDashboard) — with only one database tracked
+  // (by far the common case), jumping straight to the dashboard stays a
+  // single click, same as before; a second+ database is when "which one"
+  // actually becomes a real question, so that's exactly when this asks it,
+  // rather than making every click pay for a choice most setups never have.
+  async function pickDatabaseThenOpenDashboard(): Promise<void> {
+    const { databases } = await runner.call("listDatabases", {});
+    if (!databases || databases.length <= 1) {
+      await vscode.commands.executeCommand("multiRepoAgentControlCenter.openDashboard");
+      return;
+    }
+    const items: (vscode.QuickPickItem & { dbId: string })[] = databases.map((d: any) => {
+      const bits: string[] = [];
+      if (d.requirementTitle) bits.push(d.requirementTitle);
+      if (d.requirementPhase) bits.push(`(${d.requirementPhase})`);
+      bits.push(d.repoCount === 1 ? "1 repo" : `${d.repoCount} repos`);
+      return {
+        label: (d.id === selectedDbId ? "$(check) " : "$(database) ") + d.id,
+        description: bits.join(" · "),
+        detail: d.requirementSummary || "No summary yet — set on completing Critique.",
+        dbId: d.id as string,
+      };
+    });
+    const picked = await vscode.window.showQuickPick(items, { placeHolder: "Which database should the dashboard focus?" });
+    if (!picked) return;
+    if (picked.dbId !== selectedDbId) await switchDatabase(picked.dbId);
+    await vscode.commands.executeCommand("multiRepoAgentControlCenter.openDashboard");
+  }
+
   // The dashboard's own "add database" button — lets a new, genuinely
   // empty database be created and switched to directly, rather than only
   // coming into existence whenever some MCP client first happens to
@@ -457,10 +497,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
     if (!dbId) return;
     await runner.call("createDatabase", { dbId });
-    selectedDbId = dbId;
-    await context.globalState.update(SELECTED_DB_KEY, dbId);
-    runner.dbId = dbId;
-    await syncFromDaemon();
+    await switchDatabase(dbId);
     // Same onboarding offer a first-ever dashboard open gets (maybeOnboard
     // below) — a freshly created dbId is by construction empty, so this
     // always finds zero repos and offers to populate it, rather than
@@ -624,19 +661,14 @@ export function activate(context: vscode.ExtensionContext) {
           case "startAgent":
             await runner.call("startAgent", { repoId: msg.repoId });
             break;
-          case "switchDatabase": {
+          case "switchDatabase":
             // Only ever switches which already-known dbId this window's
             // dashboard is pointed at — never touches a path, and never
             // creates a new one implicitly (the daemon only creates a
             // dbId's file the first time something is actually written to
             // it, e.g. add_repo/discover from an MCP client using that id).
-            const dbId = String(msg.dbId || "default");
-            selectedDbId = dbId;
-            await context.globalState.update(SELECTED_DB_KEY, dbId);
-            runner.dbId = dbId;
-            await syncFromDaemon();
+            await switchDatabase(String(msg.dbId || "default"));
             break;
-          }
           case "createDatabase":
             await createAndSwitchDatabase();
             break;
@@ -798,17 +830,24 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  const pickDatabase = vscode.commands.registerCommand(
+    "multiRepoAgentControlCenter.pickDatabase",
+    pickDatabaseThenOpenDashboard
+  );
+
   // A permanent status bar entry so opening the dashboard (the thing
   // that's actually needed constantly) never requires the Command Palette
-  // at all — clicking it goes straight there, same as the command. A
-  // right-click-style "give me the other commands too" QuickPick lives
-  // behind a second, narrower click target next to it (this extension's
-  // other commands — restart, reset, MCP registration — are rare enough
-  // that they don't each need their own permanent status bar real estate).
+  // at all — clicking it goes straight there (via pickDatabaseThenOpenDashboard,
+  // which only actually asks "which database?" when there's more than one
+  // to choose from — see its own comment). A right-click-style "give me
+  // the other commands too" QuickPick lives behind a second, narrower
+  // click target next to it (this extension's other commands — restart,
+  // reset, MCP registration — are rare enough that they don't each need
+  // their own permanent status bar real estate).
   const dashboardStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   dashboardStatusBarItem.text = "$(circuit-board) Control Center";
-  dashboardStatusBarItem.tooltip = "Open Agent Control Center dashboard";
-  dashboardStatusBarItem.command = "multiRepoAgentControlCenter.openDashboard";
+  dashboardStatusBarItem.tooltip = "Open Agent Control Center dashboard (asks which database first, if more than one is tracked)";
+  dashboardStatusBarItem.command = "multiRepoAgentControlCenter.pickDatabase";
   dashboardStatusBarItem.show();
 
   const moreStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
@@ -821,6 +860,7 @@ export function activate(context: vscode.ExtensionContext) {
     const picked = await vscode.window.showQuickPick(
       [
         { label: "$(browser) Open Dashboard", command: "multiRepoAgentControlCenter.openDashboard" },
+        { label: "$(database) Switch Database…", command: "multiRepoAgentControlCenter.pickDatabase" },
         { label: "$(refresh) Restart Runner", command: "multiRepoAgentControlCenter.restartRunner" },
         { label: "$(link) Copy MCP Registration Command", command: "multiRepoAgentControlCenter.copyMcpRegistrationCommand" },
         { label: "$(new-file) Create .mcp.json", command: "multiRepoAgentControlCenter.createMcpJson" },
@@ -837,6 +877,7 @@ export function activate(context: vscode.ExtensionContext) {
     resetAllData,
     copyMcpRegistrationCommand,
     createMcpJson,
+    pickDatabase,
     quickMenu,
     dashboardStatusBarItem,
     moreStatusBarItem,
