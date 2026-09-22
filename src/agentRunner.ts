@@ -185,7 +185,7 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
   db.appendLog(
     repo.id,
     "info",
-    `${dispatch.kind === "intro" ? "introspection " : ""}dispatch received — ${text.split("\n")[0].slice(0, 80)}`
+    `${dispatch.kind === "intro" ? "introspection " : dispatch.kind === "cruise" ? "cruise control " : ""}dispatch received — ${text.split("\n")[0].slice(0, 80)}`
   );
 
   const abortController = new AbortController();
@@ -302,6 +302,16 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
         for (const b of blocks) {
           if (b.type === "text" && b.text) {
             finalText = b.text;
+            // Previously only captured into finalText (the dispatch's
+            // eventual response, written once the whole run completes) —
+            // nothing surfaced it live, so the Output channel showed only
+            // tool calls while a run was actually in progress, with no
+            // visibility into the agent's own reasoning/commentary between
+            // them. Capped, not the full text: this is a live progress
+            // line, not a replacement for the full response already stored
+            // via setDispatchResponse once the run finishes.
+            const preview = b.text.length > 300 ? `${b.text.slice(0, 300)}…` : b.text;
+            db.appendLog(repo.id, "say", preview);
           } else if (b.type === "tool_use") {
             // Skip control-center's own tools (ask_human) here — their
             // handler already logs a clean, untruncated "[ask]" line with
@@ -313,6 +323,39 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
               db.appendLog(repo.id, "bash", `${b.name}(${JSON.stringify(b.input ?? {}).slice(0, 100)})`);
             }
           }
+        }
+      } else if (type === "user") {
+        // A Bash tool call's result carries the Agent SDK's own structured
+        // classification of git/gh activity it detected in that command
+        // (see BashOutput.gitOperation in the SDK's types) — "client-facing
+        // ... so clients don't have to re-parse stdout." This is a far
+        // better signal than either trusting the agent to self-report a PR
+        // it opened, or scanning `gh pr list` after the fact: it's
+        // automatic (no cooperation needed from the model), and scoped
+        // exactly to commands THIS dispatch actually ran, so a stray PR
+        // that already existed on the repo (opened by a human, or before
+        // this tool ever tracked it) never gets attributed here.
+        // Only the actions that actually change the PR's own lifecycle
+        // state get recorded — "edited"/"commented" don't move it between
+        // open/merged/closed, and re-writing the same status on every
+        // comment would just be noise. "created"/"reopened"/"ready" all
+        // mean "open" (a draft going ready-for-review is still an open
+        // PR); "merged"/"closed" are terminal states the dashboard can
+        // show distinctly. upsertPullRequest is keyed by (repo, number),
+        // so a later status for the SAME PR updates it in place rather
+        // than adding a second entry.
+        const pr = (message as any)?.tool_use_result?.gitOperation?.pr;
+        const prStatus: Record<string, "open" | "merged" | "closed"> = {
+          created: "open",
+          reopened: "open",
+          ready: "open",
+          merged: "merged",
+          closed: "closed",
+        };
+        const status = pr && typeof pr.number === "number" ? prStatus[pr.action] : undefined;
+        if (pr && status) {
+          db.upsertPullRequest(repo.id, pr.number, pr.url || "", status);
+          db.appendLog(repo.id, "out", `pull request #${pr.number} ${status}`);
         }
       } else if (type === "result") {
         if (typeof message.result === "string") finalText = message.result;
@@ -333,8 +376,24 @@ export async function runDispatch(db: Db, repo: Repo, dispatch: Dispatch): Promi
   if (dispatch.kind === "intro" && finalText) {
     db.setRepoSummary(repo.id, finalText);
   }
+  if (dispatch.kind === "learnings" && finalText) {
+    db.addLearning({
+      requirement_id: db.currentRequirementId(),
+      requirement_title: db.getMeta("requirement_title") || "",
+      repo_id: repo.id,
+      repo_label: repo.repo,
+      lessons: "",
+      decisions: "",
+      future_improvements: "",
+      text: finalText,
+    });
+  }
   const repoNow = db.getRepo(repo.id);
   if (repoNow && repoNow.agent_status !== "needsHuman") {
-    db.setRepoStatus(repo.id, "idle");
+    // The final learnings dispatch is this repo's last action for the
+    // requirement that just reached Done — leave it stopped rather than
+    // idle (which would otherwise happily pick up whatever's queued
+    // next), matching "stop all agents" as part of that same transition.
+    db.setRepoStatus(repo.id, dispatch.kind === "learnings" ? "stopped" : "idle");
   }
 }

@@ -15,7 +15,7 @@ import * as path from "node:path";
 
 export type AgentStatus = "running" | "idle" | "needsHuman" | "stopped";
 export type DispatchState = "queued" | "sent";
-export type DispatchKind = "user" | "intro";
+export type DispatchKind = "user" | "intro" | "learnings" | "cruise";
 export type FindingBy = "ai" | "wait" | "human";
 export type FindingSev = "open" | "watch" | "done";
 
@@ -101,6 +101,17 @@ export interface Finding {
   // "a finding exists somewhere in the DB's history", which old requirements
   // would otherwise satisfy for free.
   requirement_id: number;
+  // Coordinator-set at add_finding time — a third state between a silent
+  // FYI and a hard waitingOnHuman block: still decided autonomously (by
+  // stays 'ai'), but surfaced in its own "please skim" queue rather than
+  // buried in the general log.
+  flag_for_review: 0 | 1;
+  // Human-set ONLY, from the dashboard (no MCP tool sets this — same
+  // "only a human can" pattern as the operator-approval gate) — a
+  // pushback on a finding the coordinator already decided autonomously.
+  // Any disputed finding for the current requirement blocks the
+  // Plan -> Implement gate until resolved (see mcp.ts).
+  disputed: 0 | 1;
 }
 
 export interface LogLine {
@@ -120,6 +131,25 @@ export interface Task {
   status: "done" | "active" | "blocking" | "todo";
   deps: string[];
   milestone: 0 | 1;
+  // The task's own interface, specified up front — an OpenAPI spec, a DB
+  // schema, a queue message format, a shared file/durable object shape,
+  // etc. Enforced (non-empty, unless milestone or noContractNeeded) the
+  // same way the "states a test" rule is: see upsert_task/upsert_tasks in
+  // mcp.ts. '' for a task exempted via noContractNeeded (scaffold/pure
+  // debt/refactor — nothing crossing a service boundary to specify).
+  contract: string;
+  // Ids of checklist_items (see ChecklistItem) this task addresses — the
+  // Implement gate refuses to advance while any checklist item for this
+  // requirement has zero tasks covering it (see set_requirement_phase in
+  // mcp.ts). '' /[] is legal (not every task has to map to a checklist
+  // bullet), but every checklist bullet must map to at least one task.
+  covers: string[];
+  // The evidence a task was actually marked done on — test output, a
+  // commit SHA, a PR link, whatever was actually checked. Optional, not
+  // enforced (upsert_task doesn't refuse a done task with this empty) —
+  // this makes "trust but verify" auditable after the fact rather than
+  // just relying on the coordinator's own summary of what it verified.
+  doneEvidence: string;
   // Stamped on first insert from currentRequirementId(), preserved across
   // later upserts (a task keeps belonging to the requirement that created
   // it, even if the plan is still being amended). Optional on the input
@@ -127,15 +157,83 @@ export interface Task {
   requirement_id?: number;
 }
 
+// One bullet per discrete item pulled out of the requirement during
+// Critique (see set_requirement_phase's checklist param) — the thing a
+// task's `covers` field points at. Existence of a mapping is a purely
+// structural check: it catches a requirement item nobody ever wrote a
+// task for, not a task that nominally covers a bullet but implements it
+// shallowly (that class of gap is Closing's job, via the end-to-end
+// finding). Deliberately never surfaced in the dashboard as a general
+// list (it's an internal discipline mechanism, not a feature) — the one
+// exception is `ambiguous` items specifically, shown narrowly so a human
+// knows to expect a waitingOnHuman finding resolving each one before
+// Plan completes (see mcp.ts's set_requirement_phase).
+export interface ChecklistItem {
+  id: string;
+  requirement_id: number;
+  text: string;
+  ambiguous: 0 | 1;
+  created_at: string;
+}
+
+export type PullRequestStatus = "open" | "merged" | "closed";
+
+export interface PullRequest {
+  repo_id: string;
+  number: number;
+  url: string;
+  status: PullRequestStatus;
+  updated_at: string;
+}
+
+// One row per submitter per requirement — the coordinator's own
+// structured submission (repo_id: 'coordinator', lessons/decisions/
+// future_improvements populated, text left '') required by
+// set_requirement_phase's "done" gate, plus one per repo whose agent
+// answered the automatic final "learnings" dispatch queued as part of
+// that same transition (text holds its free-form reply; the three
+// structured columns are left '' since a dispatch response isn't a
+// validated tool call the way the coordinator's own submission is).
+export interface Learning {
+  id: string;
+  requirement_id: number;
+  requirement_title: string;
+  repo_id: string;
+  repo_label: string;
+  lessons: string;
+  decisions: string;
+  future_improvements: string;
+  text: string;
+  created_at: string;
+}
+
+// Configurable, not a fixed 5-field shape — see doc_categories below. A
+// category's actual text lives in meta as `plan_doc_<id>`, keyed by this
+// row's own id, so renaming a category's label never orphans its text and
+// removing one doesn't touch any other category's storage.
+export interface DocCategory {
+  id: string;
+  label: string;
+  seq: number;
+}
+
+export type PlanDocs = Record<string, string>;
+
 export interface Snapshot {
-  repos: (Repo & { dispatches: Dispatch[]; escalation: Escalation | null })[];
+  repos: (Repo & { dispatches: Dispatch[]; escalation: Escalation | null; pullRequests: PullRequest[] })[];
   findings: Finding[];
   tasks: Task[];
+  checklist: ChecklistItem[];
   logs: Record<string, LogLine[]>;
   log: LogEntry[];
+  learnings: Learning[];
   requirementPhase: string | null;
   requirementTitle: string | null;
   cruiseControl: boolean;
+  docCategories: DocCategory[];
+  planDocs: PlanDocs;
+  operatorGateEnabled: boolean;
+  operatorGatePending: boolean;
 }
 
 const SCHEMA = `
@@ -188,7 +286,9 @@ CREATE TABLE IF NOT EXISTS findings (
   by TEXT NOT NULL DEFAULT 'ai',
   sev TEXT NOT NULL DEFAULT 'open',
   answer TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  flag_for_review INTEGER NOT NULL DEFAULT 0,
+  disputed INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS logs (
@@ -207,7 +307,21 @@ CREATE TABLE IF NOT EXISTS tasks (
   dur_h REAL NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo',
   deps_json TEXT NOT NULL DEFAULT '[]',
-  milestone INTEGER NOT NULL DEFAULT 0
+  milestone INTEGER NOT NULL DEFAULT 0,
+  contract TEXT NOT NULL DEFAULT '',
+  covers_json TEXT NOT NULL DEFAULT '[]',
+  done_evidence TEXT NOT NULL DEFAULT ''
+);
+
+-- One row per discrete item pulled out of the requirement during Critique
+-- (see set_requirement_phase's checklist param in mcp.ts) — see
+-- ChecklistItem's own comment for what this is for.
+CREATE TABLE IF NOT EXISTS checklist_items (
+  id TEXT PRIMARY KEY,
+  requirement_id INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  ambiguous INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
 );
 
 -- small key/value settings store — e.g. the GitHub owner and local code
@@ -216,6 +330,50 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+-- The configurable list of Plan → Docs categories (see DocCategory) — a
+-- database, not a hardcoded 5-field shape, so a coordinator can add one
+-- (e.g. a project that needs a category this seed list doesn't cover)
+-- without a code change. Seeded on first migrate() with today's defaults;
+-- an existing category's own doc TEXT still lives in meta as
+-- plan_doc_<id>, not in this table.
+CREATE TABLE IF NOT EXISTS doc_categories (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  seq INTEGER NOT NULL
+);
+
+-- Auto-tracked only (see agentRunner.ts) — populated from the Agent SDK's
+-- own structured detection of a Bash tool call's git/gh activity, never
+-- from a scan of what's actually on GitHub, so a PR that already existed
+-- before this tool tracked the repo (or was opened by something other
+-- than a dispatch) never appears here. Keyed by (repo_id, number) so a
+-- later status change (opened → merged/closed) updates the same row
+-- instead of appending a duplicate.
+CREATE TABLE IF NOT EXISTS pull_requests (
+  repo_id TEXT NOT NULL REFERENCES repos(id),
+  number INTEGER NOT NULL,
+  url TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (repo_id, number)
+);
+
+-- repo_id here is deliberately NOT a foreign key, same reasoning as
+-- findings: 'coordinator' is a free-text label for the coordinator's own
+-- structured submission, not a lookup against repos(id).
+CREATE TABLE IF NOT EXISTS learnings (
+  id TEXT PRIMARY KEY,
+  requirement_id INTEGER NOT NULL,
+  requirement_title TEXT NOT NULL DEFAULT '',
+  repo_id TEXT NOT NULL,
+  repo_label TEXT NOT NULL,
+  lessons TEXT NOT NULL DEFAULT '',
+  decisions TEXT NOT NULL DEFAULT '',
+  future_improvements TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
 );
 `;
 
@@ -282,6 +440,39 @@ export class Db {
     // if requirement 1 had been explicit all along.
     ensureColumn("findings", "requirement_id", "INTEGER NOT NULL DEFAULT 1");
     ensureColumn("tasks", "requirement_id", "INTEGER NOT NULL DEFAULT 1");
+    ensureColumn("tasks", "contract", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn("tasks", "covers_json", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("tasks", "done_evidence", "TEXT NOT NULL DEFAULT ''");
+    ensureColumn("findings", "flag_for_review", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn("findings", "disputed", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn("checklist_items", "ambiguous", "INTEGER NOT NULL DEFAULT 0");
+
+    // Seeded once, on whichever migrate() call first sees an empty table
+    // (a brand-new database, or an existing one from before doc_categories
+    // existed at all — CREATE TABLE IF NOT EXISTS above only creates the
+    // empty table for it, doesn't seed rows). Never re-seeds an existing,
+    // possibly-edited list — this only fires when the table is genuinely
+    // empty. Ids match the meta keys (plan_doc_schema etc.) already written
+    // by earlier versions of this tool, so an existing database's
+    // already-submitted doc text is picked back up under the same category,
+    // not orphaned.
+    const docCategoryCount = (this.conn.prepare(`SELECT COUNT(*) AS n FROM doc_categories`).get() as { n: number })
+      .n;
+    if (docCategoryCount === 0) {
+      const insertCategory = this.conn.prepare(`INSERT INTO doc_categories (id, label, seq) VALUES (?, ?, ?)`);
+      // Ids match the plan_doc_<id> meta keys earlier versions of this
+      // tool already wrote (e.g. plan_doc_file_structures, not
+      // plan_doc_fileStructures) — see this block's own comment above.
+      const seeded: Array<[string, string]> = [
+        ["schema", "Schema"],
+        ["apis", "APIs"],
+        ["messages", "Messages"],
+        ["file_structures", "File Structures"],
+        ["sequence", "Sequence"],
+        ["others", "Others"],
+      ];
+      seeded.forEach(([id, label], i) => insertCategory.run(id, label, i));
+    }
   }
 
   onChange(cb: () => void) {
@@ -309,6 +500,32 @@ export class Db {
   setRepoSummary(id: string, summary: string) {
     this.conn.prepare(`UPDATE repos SET summary = ? WHERE id = ?`).run(summary, id);
     this.changed();
+  }
+
+  // Called only from agentRunner.ts, itself only in response to the Agent
+  // SDK's own structured gitOperation.pr detection on a Bash tool result
+  // (see BashOutput in the SDK's types) — i.e. only for a PR the repo's
+  // OWN dispatched agent actually created or changed the state of via a
+  // command it ran, never a scan of what's on GitHub, so a stray
+  // pre-existing PR (opened by a human, or before this tool tracked the
+  // repo at all) never shows up here. Keyed by (repo_id, number): a later
+  // status change (opened → merged/closed) updates the same row in place
+  // rather than appending a second one for the same PR.
+  upsertPullRequest(repoId: string, number: number, url: string, status: PullRequestStatus) {
+    this.conn
+      .prepare(
+        `INSERT INTO pull_requests (repo_id, number, url, status, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(repo_id, number) DO UPDATE SET url=excluded.url, status=excluded.status, updated_at=excluded.updated_at`
+      )
+      .run(repoId, number, url, status, sortableClock());
+    this.changed();
+  }
+
+  listPullRequests(repoId: string): PullRequest[] {
+    return this.conn
+      .prepare(`SELECT * FROM pull_requests WHERE repo_id = ? ORDER BY number`)
+      .all(repoId) as unknown as PullRequest[];
   }
 
   listRepos(): Repo[] {
@@ -375,6 +592,46 @@ export class Db {
       .prepare(`SELECT 1 AS x FROM dispatches WHERE repo_id = ? AND kind = 'intro' LIMIT 1`)
       .get(repoId);
     return !!row;
+  }
+
+  // Same queue-jump reasoning as queueIntroDispatch: this is meant to run
+  // as the repo's very next action once the requirement reaches Done, not
+  // wherever it happens to land behind whatever's already queued.
+  queueLearningsDispatch(repoId: string, text: string): Dispatch {
+    const id = `${repoId}-learnings-${Date.now()}`;
+    const seq = (
+      this.conn.prepare(`SELECT COALESCE(MIN(seq), 1) - 1 AS n FROM dispatches WHERE repo_id = ?`).get(repoId) as {
+        n: number;
+      }
+    ).n;
+    this.conn
+      .prepare(
+        `INSERT INTO dispatches (id, repo_id, kind, text, state, at, response, responded_at, session_id, seq)
+         VALUES (?, ?, 'learnings', ?, 'queued', '', '', '', NULL, ?)`
+      )
+      .run(id, repoId, text, seq);
+    this.changed();
+    return this.getDispatch(id)!;
+  }
+
+  // Same queue-jump reasoning as queueIntroDispatch — this is context for
+  // how to handle whatever's next, so it should land before anything
+  // already sitting in the queue, not behind it.
+  queueCruiseControlDispatch(repoId: string, text: string): Dispatch {
+    const id = `${repoId}-cruise-${Date.now()}`;
+    const seq = (
+      this.conn.prepare(`SELECT COALESCE(MIN(seq), 1) - 1 AS n FROM dispatches WHERE repo_id = ?`).get(repoId) as {
+        n: number;
+      }
+    ).n;
+    this.conn
+      .prepare(
+        `INSERT INTO dispatches (id, repo_id, kind, text, state, at, response, responded_at, session_id, seq)
+         VALUES (?, ?, 'cruise', ?, 'queued', '', '', '', NULL, ?)`
+      )
+      .run(id, repoId, text, seq);
+    this.changed();
+    return this.getDispatch(id)!;
   }
 
   getDispatch(id: string): Dispatch | undefined {
@@ -466,16 +723,17 @@ export class Db {
     phase: string,
     by: FindingBy,
     sev: FindingSev,
-    disposition: string
+    disposition: string,
+    flagForReview = false
   ): Finding {
     const id = `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const requirementId = this.currentRequirementId();
     this.conn
       .prepare(
-        `INSERT INTO findings (id, repo_id, text, phase, disposition, by, sev, answer, created_at, requirement_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)`
+        `INSERT INTO findings (id, repo_id, text, phase, disposition, by, sev, answer, created_at, requirement_id, flag_for_review)
+         VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`
       )
-      .run(id, repoId, text, phase, disposition, by, sev, sortableClock(), requirementId);
+      .run(id, repoId, text, phase, disposition, by, sev, sortableClock(), requirementId, flagForReview ? 1 : 0);
     this.changed();
     return this.getFinding(id)!;
   }
@@ -486,8 +744,69 @@ export class Db {
       | undefined;
   }
 
-  listFindings(): Finding[] {
-    return this.conn.prepare(`SELECT * FROM findings ORDER BY created_at`).all() as unknown as Finding[];
+  listFindings(filter?: { hasAnswer?: boolean; since?: string }): Finding[] {
+    const clauses: string[] = [];
+    const params: any[] = [];
+    if (filter?.hasAnswer === true) clauses.push(`answer != ''`);
+    if (filter?.hasAnswer === false) clauses.push(`answer = ''`);
+    if (filter?.since) {
+      clauses.push(`created_at >= ?`);
+      params.push(filter.since);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    return this.conn.prepare(`SELECT * FROM findings ${where} ORDER BY created_at`).all(...params) as unknown as Finding[];
+  }
+
+  // Dashboard-only (see extension.ts/server.ts) — a human pushing back on
+  // a finding the coordinator already decided autonomously. Toggling,
+  // not a one-way flag: a human can also un-dispute once satisfied.
+  setFindingDisputed(id: string, disputed: boolean) {
+    this.conn.prepare(`UPDATE findings SET disputed = ? WHERE id = ?`).run(disputed ? 1 : 0, id);
+    this.changed();
+  }
+
+  countDisputedFindingsForRequirement(requirementId: number): number {
+    const row = this.conn
+      .prepare(`SELECT COUNT(*) AS n FROM findings WHERE requirement_id = ? AND disputed = 1`)
+      .get(requirementId) as { n: number };
+    return row.n;
+  }
+
+  countWaitingOnHumanFindingsForRequirement(requirementId: number): number {
+    const row = this.conn
+      .prepare(`SELECT COUNT(*) AS n FROM findings WHERE requirement_id = ? AND by = 'wait'`)
+      .get(requirementId) as { n: number };
+    return row.n;
+  }
+
+  addLearning(input: Omit<Learning, "id" | "created_at">): Learning {
+    const id = `l-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const created_at = sortableClock();
+    this.conn
+      .prepare(
+        `INSERT INTO learnings (id, requirement_id, requirement_title, repo_id, repo_label, lessons, decisions, future_improvements, text, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        input.requirement_id,
+        input.requirement_title,
+        input.repo_id,
+        input.repo_label,
+        input.lessons,
+        input.decisions,
+        input.future_improvements,
+        input.text,
+        created_at
+      );
+    this.changed();
+    return { id, created_at, ...input };
+  }
+
+  // Newest first — a Learnings tab reads top-to-bottom as a log of
+  // requirements as they closed out, not a plan to scroll to the bottom of.
+  listLearnings(): Learning[] {
+    return this.conn.prepare(`SELECT * FROM learnings ORDER BY created_at DESC`).all() as unknown as Learning[];
   }
 
   // A human answering a "waiting on human" finding. This only records the
@@ -527,19 +846,33 @@ export class Db {
     // stamps it, from the requirement that's current *right now*.
     this.conn
       .prepare(
-        `INSERT INTO tasks (id, repo, task, start_h, dur_h, status, deps_json, milestone, requirement_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO tasks (id, repo, task, start_h, dur_h, status, deps_json, milestone, contract, covers_json, done_evidence, requirement_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET repo=excluded.repo, task=excluded.task,
            start_h=excluded.start_h, dur_h=excluded.dur_h, status=excluded.status,
-           deps_json=excluded.deps_json, milestone=excluded.milestone`
+           deps_json=excluded.deps_json, milestone=excluded.milestone, contract=excluded.contract,
+           covers_json=excluded.covers_json, done_evidence=excluded.done_evidence`
       )
-      .run(t.id, t.repo, t.task, t.start_h, t.dur_h, t.status, JSON.stringify(t.deps), t.milestone, this.currentRequirementId());
+      .run(
+        t.id,
+        t.repo,
+        t.task,
+        t.start_h,
+        t.dur_h,
+        t.status,
+        JSON.stringify(t.deps),
+        t.milestone,
+        t.contract ?? "",
+        JSON.stringify(t.covers ?? []),
+        t.doneEvidence ?? "",
+        this.currentRequirementId()
+      );
     this.changed();
   }
 
   listTasks(): Task[] {
     const rows = this.conn.prepare(`SELECT * FROM tasks ORDER BY start_h, rowid`).all() as any[];
-    return rows.map((r) => ({ ...r, deps: JSON.parse(r.deps_json) }));
+    return rows.map((r) => ({ ...r, deps: JSON.parse(r.deps_json), covers: JSON.parse(r.covers_json), doneEvidence: r.done_evidence }));
   }
 
   // Only this requirement's own tasks — used by the phase gates so a new
@@ -549,7 +882,77 @@ export class Db {
     const rows = this.conn
       .prepare(`SELECT * FROM tasks WHERE requirement_id = ? ORDER BY start_h, rowid`)
       .all(requirementId) as any[];
-    return rows.map((r) => ({ ...r, deps: JSON.parse(r.deps_json) }));
+    return rows.map((r) => ({ ...r, deps: JSON.parse(r.deps_json), covers: JSON.parse(r.covers_json), doneEvidence: r.done_evidence }));
+  }
+
+  addChecklistItems(requirementId: number, items: Array<{ text: string; ambiguous?: boolean }>): ChecklistItem[] {
+    const created_at = sortableClock();
+    const insert = this.conn.prepare(
+      `INSERT INTO checklist_items (id, requirement_id, text, ambiguous, created_at) VALUES (?, ?, ?, ?, ?)`
+    );
+    const rows: ChecklistItem[] = items.map((item, i) => {
+      const id = `c-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`;
+      const ambiguous: 0 | 1 = item.ambiguous ? 1 : 0;
+      insert.run(id, requirementId, item.text, ambiguous, created_at);
+      return { id, requirement_id: requirementId, text: item.text, ambiguous, created_at };
+    });
+    this.changed();
+    return rows;
+  }
+
+  checklistForRequirement(requirementId: number): ChecklistItem[] {
+    return this.conn
+      .prepare(`SELECT * FROM checklist_items WHERE requirement_id = ? ORDER BY rowid`)
+      .all(requirementId) as unknown as ChecklistItem[];
+  }
+
+  // ---- Plan → Docs categories (configurable, see DocCategory) ----
+
+  listDocCategories(): DocCategory[] {
+    return this.conn.prepare(`SELECT * FROM doc_categories ORDER BY seq`).all() as unknown as DocCategory[];
+  }
+
+  addDocCategory(label: string): DocCategory {
+    const base =
+      label
+        .trim()
+        .replace(/[^a-zA-Z0-9]+/g, " ")
+        .trim()
+        .split(" ")
+        .map((w, i) => (i === 0 ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+        .join("") || "category";
+    const existingIds = new Set(this.listDocCategories().map((c) => c.id));
+    let id = base;
+    let n = 2;
+    while (existingIds.has(id)) {
+      id = `${base}${n}`;
+      n++;
+    }
+    const seq = (
+      this.conn.prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS n FROM doc_categories`).get() as { n: number }
+    ).n;
+    this.conn.prepare(`INSERT INTO doc_categories (id, label, seq) VALUES (?, ?, ?)`).run(id, label.trim(), seq);
+    this.changed();
+    return { id, label: label.trim(), seq };
+  }
+
+  // The category's own already-submitted doc text (meta's plan_doc_<id>)
+  // is deliberately left in place — removing the category just takes it
+  // out of the configured list and Implement's gate, not a data wipe; a
+  // re-added category under the same id would see its old text again.
+  removeDocCategory(id: string) {
+    this.conn.prepare(`DELETE FROM doc_categories WHERE id = ?`).run(id);
+    this.changed();
+  }
+
+  getPlanDocs(): PlanDocs {
+    const out: PlanDocs = {};
+    for (const c of this.listDocCategories()) out[c.id] = this.getMeta(`plan_doc_${c.id}`) || "";
+    return out;
+  }
+
+  setPlanDoc(categoryId: string, text: string) {
+    this.setMeta(`plan_doc_${categoryId}`, text);
   }
 
   // A unified "is anything happening" feed: one entry when a dispatch is
@@ -596,6 +999,7 @@ export class Db {
       ...r,
       dispatches: this.listDispatches(r.id),
       escalation: this.openEscalationForRepo(r.id),
+      pullRequests: this.listPullRequests(r.id),
     }));
     const logs: Record<string, LogLine[]> = {};
     for (const r of repos) logs[r.id] = this.recentLogs(r.id);
@@ -603,11 +1007,17 @@ export class Db {
       repos,
       findings: this.listFindings(),
       tasks: this.listTasks(),
+      checklist: this.checklistForRequirement(this.currentRequirementId()),
       logs,
       log: this.listLogEntries(),
+      learnings: this.listLearnings(),
       requirementPhase: this.getMeta("requirement_phase"),
       requirementTitle: this.getMeta("requirement_title"),
       cruiseControl: this.getMeta("cruise_control") === "on",
+      docCategories: this.listDocCategories(),
+      planDocs: this.getPlanDocs(),
+      operatorGateEnabled: this.getMeta("operator_gate_enabled") === "on",
+      operatorGatePending: this.getMeta("operator_gate_pending") === "on",
     };
   }
 

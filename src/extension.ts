@@ -2,52 +2,70 @@ import * as vscode from "vscode";
 import * as cp from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as readline from "node:readline";
+import * as os from "node:os";
+import { IpcClient } from "./ipc";
 
 // The extension host never touches SQLite directly — its own Electron/Node
 // runtime isn't guaranteed to have node:sqlite. Everything goes through the
-// server.ts daemon (spawned below) over a small newline-delimited JSON
-// protocol on its stdin/stdout.
+// server.ts daemon over its socket (see ipc.ts). The daemon is shared
+// across every VS Code window (its socket path lives under globalStorage,
+// which is per-user-per-extension, not per-workspace) and across every MCP
+// client too — this class either connects to an already-running daemon or,
+// if none is listening yet, spawns one and becomes its owner (tracked via
+// spawnedProc, only set in that case) so restart/reset commands can still
+// kill it outright.
 class RunnerClient {
-  private proc: cp.ChildProcess;
-  private nextId = 1;
-  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+  private ipc: IpcClient | null = null;
+  private spawnedProc: cp.ChildProcess | null = null;
   private updateListeners: Array<() => void> = [];
+  dbId: string;
   readonly ready: Promise<void>;
 
-  constructor(nodeBin: string, serverScript: string, dbPath: string, out: vscode.OutputChannel) {
-    this.proc = cp.spawn(nodeBin, [serverScript, "--db", dbPath], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    this.proc.stderr?.on("data", (d) => out.append(`[runner] ${d}`));
-    this.proc.on("exit", (code) => out.appendLine(`[runner] exited (${code})`));
+  constructor(
+    private nodeBin: string,
+    private serverScript: string,
+    private storageDir: string,
+    private socketPath: string,
+    dbId: string,
+    private out: vscode.OutputChannel,
+    private httpPort: number
+  ) {
+    this.dbId = dbId;
+    this.ready = this.init();
+  }
 
-    let resolveReady: () => void;
-    this.ready = new Promise((r) => (resolveReady = r));
-
-    const rl = readline.createInterface({ input: this.proc.stdout! });
-    rl.on("line", (line) => {
-      if (!line.trim()) return;
-      let msg: any;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        out.appendLine(`[runner] unparsable line: ${line}`);
-        return;
-      }
-      if (msg.event === "ready") {
-        resolveReady();
-        return;
-      }
-      if (msg.event === "update") {
-        for (const l of this.updateListeners) l();
-        return;
-      }
-      const pending = this.pending.get(msg.id);
-      if (!pending) return;
-      this.pending.delete(msg.id);
-      if (msg.ok) pending.resolve(msg.data);
-      else pending.reject(new Error(msg.error));
+  private async init(): Promise<void> {
+    try {
+      this.ipc = await IpcClient.connect(this.socketPath, { retries: 1, delayMs: 0 });
+    } catch {
+      // Nothing listening yet (first window this session, or a previous
+      // daemon crashed leaving a stale socket file) — spawn one and wait
+      // for it to actually come up, retrying the connect to ride out its
+      // startup instead of racing it.
+      fs.mkdirSync(this.storageDir, { recursive: true });
+      const args = [this.serverScript, "--storage-dir", this.storageDir, "--socket", this.socketPath];
+      // 0 (unset) lets the daemon fall back to its own default (an
+      // OS-picked ephemeral port) — see syncHttpPortSetting for how this
+      // gets populated with a real, persisted value after the first run.
+      if (this.httpPort) args.push("--http-port", String(this.httpPort));
+      this.spawnedProc = cp.spawn(this.nodeBin, args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
+      this.spawnedProc.stdout?.on("data", (d) => this.out.append(`[daemon] ${d}`));
+      this.spawnedProc.stderr?.on("data", (d) => this.out.append(`[daemon] ${d}`));
+      this.spawnedProc.on("exit", (code) => this.out.appendLine(`[daemon] exited (${code})`));
+      // Detached so the daemon outlives this window closing (other windows,
+      // and MCP clients, may still depend on it) — unref so it doesn't
+      // itself keep the extension host's event loop alive.
+      this.spawnedProc.unref();
+      this.ipc = await IpcClient.connect(this.socketPath);
+    }
+    this.ipc.onUpdate((event) => {
+      // Only "update" (a specific dbId's content changed) is filtered by
+      // dbId — any other event type (e.g. "databasesChanged", which
+      // carries no dbId at all) always propagates, since it's a
+      // whole-daemon fact this window needs regardless of which database
+      // it's currently showing.
+      if (event.event === "update" && event.dbId && event.dbId !== this.dbId) return;
+      for (const l of this.updateListeners) l();
     });
   }
 
@@ -55,16 +73,18 @@ class RunnerClient {
     this.updateListeners.push(cb);
   }
 
-  call(cmd: string, params: Record<string, any> = {}): Promise<any> {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.proc.stdin!.write(JSON.stringify({ id, cmd, ...params }) + "\n");
-    });
+  async call(cmd: string, params: Record<string, any> = {}): Promise<any> {
+    await this.ready;
+    return this.ipc!.call(cmd, { dbId: this.dbId, ...params });
   }
 
   dispose() {
-    this.proc.kill("SIGTERM");
+    // Only actually kills the daemon process if THIS client is the one
+    // that spawned it; if it was already running (another window got
+    // there first), disposing just drops this window's own connection —
+    // the daemon and any other window/MCP client using it are unaffected.
+    if (this.spawnedProc) this.spawnedProc.kill("SIGTERM");
+    this.ipc?.dispose();
   }
 }
 
@@ -108,12 +128,13 @@ function truncateForEmbed(s: string | null | undefined): string {
   return s.slice(0, MAX_EMBED_TEXT_CHARS) + `\n\n[… ${omitted} more characters omitted to keep the dashboard payload a safe size]`;
 }
 
-function toBootstrap(snapshot: any) {
+function toBootstrap(snapshot: any, databases: any[], currentDbId: string) {
   const repos = snapshot.repos.map((r: any) => ({
     id: r.id,
     repo: r.repo,
     phase: r.phase,
     prs: r.prs,
+    pullRequests: (r.pullRequests ?? []).map((p: any) => ({ number: p.number, url: p.url, status: p.status })),
     agent: r.agent_status,
     paused: !!r.paused,
     dispatches: r.dispatches.map((d: any) => ({
@@ -137,6 +158,8 @@ function toBootstrap(snapshot: any) {
     by: f.by,
     sev: f.sev,
     answer: f.answer,
+    flagForReview: !!f.flag_for_review,
+    disputed: !!f.disputed,
   }));
 
   const tasks = snapshot.tasks.map((t: any) => ({
@@ -148,18 +171,48 @@ function toBootstrap(snapshot: any) {
     status: t.status,
     deps: t.deps,
     milestone: !!t.milestone,
+    contract: truncateForEmbed(t.contract),
+    doneEvidence: truncateForEmbed(t.doneEvidence),
   }));
 
   const log = (snapshot.log || []).map((e: any) => ({ when: e.when, repo: e.repo, text: truncateForEmbed(e.text) }));
+
+  const learnings = (snapshot.learnings || []).map((l: any) => ({
+    id: l.id,
+    requirementTitle: l.requirement_title,
+    repo: l.repo_label,
+    lessons: truncateForEmbed(l.lessons),
+    decisions: truncateForEmbed(l.decisions),
+    futureImprovements: truncateForEmbed(l.future_improvements),
+    text: truncateForEmbed(l.text),
+    createdAt: l.created_at,
+  }));
+
+  // Deliberately filtered here, not just in the dashboard's own render
+  // logic — the checklist stays internal (see ChecklistItem's own
+  // comment); only the narrow "ambiguous items need a human's eyes before
+  // Plan completes" surface reaches the webview at all, never the full
+  // list, even if a future dashboard change forgets to filter client-side.
+  const checklist = (snapshot.checklist || [])
+    .filter((c: any) => !!c.ambiguous)
+    .map((c: any) => ({ id: c.id, text: truncateForEmbed(c.text) }));
 
   return {
     repos,
     items,
     tasks,
+    checklist,
     log,
+    learnings,
     requirementPhase: snapshot.requirementPhase || null,
     requirementTitle: snapshot.requirementTitle || null,
     cruiseControl: !!snapshot.cruiseControl,
+    docCategories: (snapshot.docCategories || []).map((c: any) => ({ id: c.id, label: c.label })),
+    planDocs: snapshot.planDocs || {},
+    operatorGateEnabled: !!snapshot.operatorGateEnabled,
+    operatorGatePending: !!snapshot.operatorGatePending,
+    databases,
+    currentDbId,
   };
 }
 
@@ -167,17 +220,36 @@ export function activate(context: vscode.ExtensionContext) {
   const out = vscode.window.createOutputChannel("Agent Control Center");
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
   const serverScript = path.join(context.extensionUri.fsPath, "out", "server.js");
-  const mcpServerScript = path.join(context.extensionUri.fsPath, "out", "mcpServer.js");
-  const dbPath = path.join(context.globalStorageUri.fsPath, "control-center.db");
-  // Without --db, the standalone MCP server process falls back to its own
-  // default (~/.control-center/control-center.db) — a completely
-  // different file from the one this extension's daemon actually watches
-  // (context.globalStorageUri). Every tool call would "succeed" while
-  // writing into a file the daemon never reads, so nothing dispatched
-  // through MCP would ever actually run. Must match dbPath exactly.
-  const mcpRegisterCommand = `claude mcp add --scope project control-center -- node ${mcpServerScript} --db "${dbPath}"`;
-  out.appendLine(`DB: ${dbPath}`);
-  out.appendLine(`To register the MCP server: ${mcpRegisterCommand}`);
+  const storageDir = context.globalStorageUri.fsPath;
+  // NOT under storageDir: a Unix domain socket path is bound by the OS's
+  // sockaddr_un limit (~104 bytes on macOS/BSD, ~108 on Linux) — unlike a
+  // regular file path, which has no such limit. globalStorage's own path
+  // (…/Code/User/globalStorage/<extension id>/) is long enough on its own
+  // (127 bytes here) that appending even "daemon.sock" overflows it,
+  // which fails with a distinctly unhelpful EINVAL from listen()/connect()
+  // — confirmed live, not hypothetical. os.tmpdir() is short and, on
+  // macOS/Linux, already scoped per OS user, so a fixed name under it is
+  // safe without needing to derive one from the (long) storage path.
+  const socketPath = path.join(os.tmpdir(), `control-center-${os.userInfo().username}.sock`);
+  // Which database this window's dashboard shows/controls — persisted per
+  // machine (globalState, not workspace state, since the daemon and its
+  // socket are themselves global) so reopening the dashboard doesn't reset
+  // it back to "default". An MCP client never sees or sets this directly;
+  // it names its own dbId independently, in its own registration URL.
+  const SELECTED_DB_KEY = "selectedDbId";
+  let selectedDbId: string = context.globalState.get(SELECTED_DB_KEY, "default");
+  // The daemon itself hosts the MCP protocol endpoint now (see server.ts's
+  // HTTP listener + mcp.ts) — no process to spawn per session, so
+  // registration is just a URL, fetched fresh each time (not cached) since
+  // the port is only known once the daemon's HTTP listener is actually up,
+  // and a stale cached port would be exactly the kind of mismatch this
+  // whole redesign has been eliminating.
+  async function mcpRegisterUrl(): Promise<string> {
+    const { port } = await runner.call("getHttpPort", {});
+    if (!port) throw new Error("the control center daemon's MCP endpoint isn't listening yet — try again in a moment.");
+    return `http://127.0.0.1:${port}/mcp?dbId=${encodeURIComponent(selectedDbId)}`;
+  }
+  out.appendLine(`Daemon socket: ${socketPath}`);
 
   // Shown once per install of this extension (globalState survives
   // updates but not uninstall/reinstall) — not added to any user- or
@@ -338,17 +410,62 @@ export function activate(context: vscode.ExtensionContext) {
     const isFirstRender = !panelInitialized;
     if (isFirstRender) panelInitialized = true;
     await runner.ready;
-    const snapshot = await runner.call("snapshot");
+    const [snapshot, { databases }] = await Promise.all([runner.call("snapshot"), runner.call("listDatabases")]);
     tailLogsToOutputChannels(snapshot);
     notifyNewEscalations(snapshot);
     if (!panel) return;
-    const bootstrap = toBootstrap(snapshot);
+    const bootstrap = toBootstrap(snapshot, databases, selectedDbId);
     if (isFirstRender) {
       out.appendLine(`[extension] assigning panel.webview.html now, t=${Date.now()}`);
       panel.webview.html = renderDashboardHtml(panel.webview, mediaRoot, bootstrap);
     } else {
       panel.webview.postMessage({ type: "snapshot", data: bootstrap });
     }
+  }
+
+  // Shared by the "Reset All Data" command and the dashboard's own
+  // inline delete button next to the database dropdown — same
+  // confirmation, same daemon call, same resync, regardless of which UI
+  // surface triggered it.
+  async function confirmAndDeleteDatabase(): Promise<void> {
+    const dbId = selectedDbId;
+    const confirm = await vscode.window.showWarningMessage(
+      `Delete all tracked repos, dispatches, escalations, findings, and the plan for database "${dbId}"? This cannot be undone.`,
+      { modal: true },
+      "Delete Everything"
+    );
+    if (confirm !== "Delete Everything") return;
+    // Deleting is a single daemon-side call (it owns every Db instance,
+    // keyed by dbId) rather than this extension host unlinking files
+    // itself — that only worked when there was exactly one process and
+    // one file to reason about.
+    await runner.call("deleteDatabase", {});
+    await syncFromDaemon();
+    vscode.window.showInformationMessage(`Agent Control Center data cleared for "${dbId}".`);
+  }
+
+  // The dashboard's own "add database" button — lets a new, genuinely
+  // empty database be created and switched to directly, rather than only
+  // coming into existence whenever some MCP client first happens to
+  // reference that dbId (which meant waiting on external setup just to
+  // see the empty state at all).
+  async function createAndSwitchDatabase(): Promise<void> {
+    const dbId = await vscode.window.showInputBox({
+      prompt: "New database id",
+      placeHolder: "e.g. teamB — letters, digits, - and _ only",
+      validateInput: (v) => (/^[a-zA-Z0-9_-]{1,64}$/.test(v) ? null : "Use letters, digits, - and _ (1-64 characters)"),
+    });
+    if (!dbId) return;
+    await runner.call("createDatabase", { dbId });
+    selectedDbId = dbId;
+    await context.globalState.update(SELECTED_DB_KEY, dbId);
+    runner.dbId = dbId;
+    await syncFromDaemon();
+    // Same onboarding offer a first-ever dashboard open gets (maybeOnboard
+    // below) — a freshly created dbId is by construction empty, so this
+    // always finds zero repos and offers to populate it, rather than
+    // leaving "+" as a dead end that only an external MCP call could fill.
+    await maybeOnboard();
   }
 
   // Deliberately "node" from PATH, not process.execPath — inside the
@@ -359,11 +476,41 @@ export function activate(context: vscode.ExtensionContext) {
   let runner = spawnRunner();
 
   function spawnRunner(): RunnerClient {
-    const r = new RunnerClient("node", serverScript, dbPath, out);
+    const savedPort = vscode.workspace.getConfiguration("multiRepoAgentControlCenter").get<number>("daemonPort", 0);
+    const r = new RunnerClient("node", serverScript, storageDir, socketPath, selectedDbId, out, savedPort);
     r.onUpdate(() => {
       syncFromDaemon().catch((err) => out.appendLine(`sync failed: ${err?.message ?? err}`));
     });
+    r.ready.then(() => syncHttpPortSetting(r)).catch(() => {});
     return r;
+  }
+
+  // Persists the daemon's HTTP port into settings the first time it's
+  // ever seen (so every restart after that asks the daemon to reuse the
+  // same one instead of a fresh random port breaking every already-
+  // registered .mcp.json — see server.ts's --http-port), and surfaces a
+  // real conflict (something else now holds that port) as an actual VS
+  // Code error instead of a registration command that silently points at
+  // a dead endpoint.
+  let httpPortErrorShown = false;
+  async function syncHttpPortSetting(r: RunnerClient): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("multiRepoAgentControlCenter");
+    const saved = cfg.get<number>("daemonPort", 0);
+    const result = await r.call("getHttpPort", {});
+    if (result.error) {
+      if (!httpPortErrorShown) {
+        httpPortErrorShown = true;
+        const choice = await vscode.window.showErrorMessage(`Agent Control Center: ${result.error}`, "Open Settings");
+        if (choice === "Open Settings") {
+          await vscode.commands.executeCommand("workbench.action.openSettings", "multiRepoAgentControlCenter.daemonPort");
+        }
+      }
+      return;
+    }
+    httpPortErrorShown = false;
+    if (!saved && result.port) {
+      await cfg.update("daemonPort", result.port, vscode.ConfigurationTarget.Global);
+    }
   }
 
   async function maybeOnboard() {
@@ -450,17 +597,51 @@ export function activate(context: vscode.ExtensionContext) {
           case "addFinding":
             await runner.call("addFinding", { repoId: msg.repoId, text: msg.text, phase: msg.phase });
             break;
+          case "setFindingDisputed":
+            await runner.call("setFindingDisputed", { findingId: msg.findingId, disputed: msg.disputed });
+            break;
           case "togglePause":
             await runner.call("togglePause", { repoId: msg.repoId });
             break;
           case "setCruiseControl":
             await runner.call("setCruiseControl", { on: msg.on });
             break;
+          case "setOperatorGate":
+            await runner.call("setOperatorGate", { on: msg.on });
+            break;
+          case "approveImplement": {
+            const confirm = await vscode.window.showWarningMessage(
+              "Approve moving this requirement to Implement? This starts real work dispatching to repos.",
+              { modal: true },
+              "Approve"
+            );
+            if (confirm === "Approve") await runner.call("approveImplement", {});
+            break;
+          }
           case "stopAgent":
             await runner.call("stopAgent", { repoId: msg.repoId });
             break;
           case "startAgent":
             await runner.call("startAgent", { repoId: msg.repoId });
+            break;
+          case "switchDatabase": {
+            // Only ever switches which already-known dbId this window's
+            // dashboard is pointed at — never touches a path, and never
+            // creates a new one implicitly (the daemon only creates a
+            // dbId's file the first time something is actually written to
+            // it, e.g. add_repo/discover from an MCP client using that id).
+            const dbId = String(msg.dbId || "default");
+            selectedDbId = dbId;
+            await context.globalState.update(SELECTED_DB_KEY, dbId);
+            runner.dbId = dbId;
+            await syncFromDaemon();
+            break;
+          }
+          case "createDatabase":
+            await createAndSwitchDatabase();
+            break;
+          case "deleteDatabase":
+            await confirmAndDeleteDatabase();
             break;
           case "watchOutput": {
             const ch = repoChannels.get(msg.repoId);
@@ -526,45 +707,26 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage("Agent Control Center runner restarted.");
   });
 
-  const resetAllData = vscode.commands.registerCommand("multiRepoAgentControlCenter.resetAllData", async () => {
-    // Deletes every tracked repo, dispatch, escalation, finding, log, and
-    // task \u2014 back to a genuinely empty state, same as a first install.
-    // Mainly for exactly the situation that prompted this command: a
-    // stale build having already seeded rows a fixed build won't remove
-    // on its own (removing the code that writes bad data doesn't undo
-    // data it already wrote).
-    const confirm = await vscode.window.showWarningMessage(
-      `Delete all tracked repos, dispatches, escalations, findings, and the plan? This cannot be undone.\n\n${dbPath}`,
-      { modal: true },
-      "Delete Everything"
-    );
-    if (confirm !== "Delete Everything") return;
-    runner.dispose();
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try {
-        fs.unlinkSync(dbPath + suffix);
-      } catch {
-        // fine if it didn't exist
-      }
-    }
-    runner = spawnRunner();
-    await syncFromDaemon();
-    vscode.window.showInformationMessage("Agent Control Center data cleared.");
-  });
+  const resetAllData = vscode.commands.registerCommand(
+    "multiRepoAgentControlCenter.resetAllData",
+    confirmAndDeleteDatabase
+  );
 
   const copyMcpRegistrationCommand = vscode.commands.registerCommand(
     "multiRepoAgentControlCenter.copyMcpRegistrationCommand",
     async () => {
       // Copies, doesn't run — registering an MCP server is the user's
       // call, not something this extension does to their config on its
-      // own. This just saves finding the right path by hand: it's
-      // computed from context.extensionUri, so it's always correct for
-      // wherever THIS install actually is (dev checkout vs. installed
-      // .vsix are different paths, and a hardcoded one in a README or
-      // walkthrough would be wrong for whichever case it wasn't written
-      // for).
-      await vscode.env.clipboard.writeText(mcpRegisterCommand);
-      vscode.window.showInformationMessage("MCP registration command copied — paste it into a terminal to run it.");
+      // own.
+      try {
+        const url = await mcpRegisterUrl();
+        await vscode.env.clipboard.writeText(
+          `claude mcp add --scope project --transport http control-center "${url}"`
+        );
+        vscode.window.showInformationMessage("MCP registration command copied — paste it into a terminal to run it.");
+      } catch (err: any) {
+        vscode.window.showErrorMessage(err?.message ?? String(err));
+      }
     }
   );
 
@@ -612,14 +774,20 @@ export function activate(context: vscode.ExtensionContext) {
         );
         if (confirm !== "Overwrite") return;
       }
+      let url: string;
+      try {
+        url = await mcpRegisterUrl();
+      } catch (err: any) {
+        vscode.window.showErrorMessage(err?.message ?? String(err));
+        return;
+      }
       // Merges into whatever else is already there (other MCP servers
       // that project already configured) rather than clobbering the file.
-      // --db must match dbPath exactly (see mcpRegisterCommand's comment
-      // above) — without it the server defaults to its own
-      // ~/.control-center/control-center.db, a different file from the
-      // one this extension's daemon actually watches, and nothing
-      // dispatched through it would ever be picked up.
-      existing.mcpServers["control-center"] = { command: "node", args: [mcpServerScript, "--db", dbPath] };
+      // A plain URL, not a command to spawn — the daemon hosts the MCP
+      // endpoint itself now (see server.ts/mcp.ts), so there's no process
+      // for this entry to launch and no path for it to get wrong; dbId is
+      // just a query param the daemon resolves to a file on its own.
+      existing.mcpServers["control-center"] = { type: "http", url };
       fs.writeFileSync(mcpJsonPath, JSON.stringify(existing, null, 2) + "\n");
 
       const doc = await vscode.workspace.openTextDocument(mcpJsonPath);
@@ -669,6 +837,8 @@ function renderDashboardHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, boo
   return raw
     .replace("{{REACT_URI}}", () => uri("vendor/react.js"))
     .replace("{{REACT_DOM_URI}}", () => uri("vendor/react-dom.js"))
+    .replace("{{MARKED_URI}}", () => uri("vendor/marked.js"))
+    .replace("{{MERMAID_URI}}", () => uri("vendor/mermaid.js"))
     .replace("{{SUPPORT_URI}}", () => uri("support.js"))
     .replace("</head>", () => `${bootstrapScript}\n</head>`);
 }

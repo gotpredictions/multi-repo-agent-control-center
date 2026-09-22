@@ -9,25 +9,24 @@ Design context: `ideas/multi-repo-agent-control-center.md` in the `.github-priva
 
 ## Architecture
 
-Three processes, one SQLite file as the shared bus (`~/.control-center/control-center.db` by
-default):
+Two processes. The daemon is the *only* one that ever touches a `.db` file — it owns one `Db`
+connection per **database id** (an opaque label, e.g. `default`, never a file path), opened lazily
+the first time something references it, and mapped to `<storage dir>/<id>.db` (`default` keeps the
+historical `control-center.db` filename). Two callers naming the same id share the same live data;
+different ids are fully isolated files:
 
-- **`src/server.ts`** — the daemon. Spawned once by the extension on activate and kept running
-  independent of any webview. Polls each repo for its next queued dispatch and runs it through the
-  Claude Agent SDK (`src/agentRunner.ts`). Also serves a tiny newline-delimited JSON protocol over
-  its own stdin/stdout for the extension host, since VS Code's Electron/Node runtime isn't
-  guaranteed to have `node:sqlite` (Node ≥22.5 required — this all assumes a real Node on `PATH`).
-- **`src/mcpServer.ts`** — the MCP gateway, spawned fresh per coordinator session by that session's
-  `.mcp.json`. Thin and stateless beyond the DB (every tool call is a direct SQLite read/write) —
-  it does not run the agent loop itself, so a coordinator dispatching through it works whether or
-  not VS Code happens to be open at that moment (the dispatch just sits `queued` until the daemon
-  is running to pick it up). It's a genuinely separate OS process from the daemon, with its own `Db`
-  connection — the daemon's `db.onChange()` only fires for writes made through *its own* connection,
-  so an MCP write (e.g. `add_finding`) doesn't trigger it directly. The daemon instead polls
-  `PRAGMA data_version` (SQLite's own signal for "another connection committed a write") on the same
-  interval as its dispatch loop, and treats a change there the same as a same-process one. Without
-  this, an MCP-driven write landed in the DB fine but the webview just never found out — confirmed
-  live, fixed by polling rather than assuming same-process events cover every writer.
+- **`src/server.ts`** — the daemon. Spawned once (by whichever extension window gets there first —
+  see `src/ipc.ts`'s `IpcServer`/`IpcClient`) and kept running independent of any webview or VS Code
+  window. Polls each open database's repos for their next queued dispatch and runs it through the
+  Claude Agent SDK (`src/agentRunner.ts`). It also hosts the MCP protocol endpoint itself
+  (`src/mcp.ts`) over plain HTTP on a loopback port — a coordinator session's `.mcp.json` points
+  straight at that URL, with no process to spawn per session (that used to be a separate
+  `mcpServer.ts`, since removed). Every request — dashboard (over the Unix domain socket,
+  `~/.control-center/daemon.sock` by default) or MCP (over HTTP, `?dbId=` on the URL) — names a
+  `dbId`; the daemon resolves that to a `Db` instance itself, so a caller can never point at the
+  wrong file the way a raw `--db <path>` argument used to allow. Because MCP calls run in the same
+  process against the same `Db` map the dashboard reads, writes from an MCP session show up in the
+  dashboard live via the daemon's own `update` push — no separate polling workaround needed for that.
 - **`src/extension.ts`** — the VS Code host. Renders `media/dashboard.html` in a webview for the
   repo table/plan/findings/log tabs (injecting a snapshot as `window.__CC_BOOTSTRAP__`, then
   `postMessage`-ing updates into the still-loaded page rather than re-rendering the whole thing —
@@ -83,6 +82,20 @@ own design conversation for why):
   made already-decided FYI entries look unresolved (a "Decided by: Human" badge on text that was
   plainly the AI's own autonomous reasoning, and the header count didn't match what was on screen).
 
+  A third state sits between a silent FYI and a hard `waitingOnHuman` block: `add_finding({
+  flagForReview: true })` — still decided autonomously (`by` stays `'ai'`), but surfaced with a
+  "Please review" badge in the Findings tab, a "please skim this" queue distinct from the "waiting
+  on a human to unblock me" one. `list_findings` also takes an optional `hasAnswer`/`since` filter
+  now (e.g. `list_findings({hasAnswer: false})` for the unresolved backlog), instead of always
+  returning the full log for a coordinator to filter client-side. And a finding can be **disputed**
+  — dashboard-only (no MCP tool sets it, deliberately, same "only a human decides this" pattern as
+  the operator-approval gate below): a human pushing back on a decision the coordinator already
+  made autonomously, via a Dispute button on each row. Any disputed finding for the current
+  requirement blocks the Plan → Implement gate until a human un-disputes it from the dashboard —
+  deliberately NOT linked to a specific checklist item or task (findings aren't tied to task/
+  checklist ids at all — the checklist itself is a purely internal discipline mechanism, never
+  surfaced in the dashboard except the one exception below).
+
 **No per-repo lifecycle field.** Critique → plan → implement → close → done is a real, useful
 discipline (see the MCP server's own instructions for the full framing), but it describes a
 *requirement's* progress, not a repo's — a requirement often spans several repos at once, and a
@@ -131,11 +144,44 @@ closing → done` (`meta` table, not a new schema addition — the key/value sto
 `github_owner`/`code_root`). Deliberately MCP-only: there is no dashboard UI for this at all, so it
 can never reflect a click instead of the coordinator's own judgment that a phase's gate — a real
 one, not "the dispatch queue emptied out" — is actually satisfied. The full gate definitions live in
-`mcpServer.ts`'s `SERVER_INSTRUCTIONS`, written verbatim from a coordinator session's own
-introspection after actually running this lifecycle once (not paraphrased — see that file if you're
-looking for the source of truth on what each gate requires). Single-slot by design: one requirement
-in flight at a time as tracked here, not a queue of many; starting a new one means explicitly
-resetting the phase back to `critique`, since it doesn't reset itself.
+`mcp.ts`'s `SERVER_INSTRUCTIONS`, written verbatim from a coordinator session's own introspection
+after actually running this lifecycle once (not paraphrased — see that file if you're looking for
+the source of truth on what each gate requires). Single-slot by design: one requirement in flight at
+a time as tracked here, not a queue of many; starting a new one means explicitly resetting the phase
+back to `critique`, since it doesn't reset itself.
+
+**The checklist stays internal, with one narrow exception.** Completing Critique means breaking the
+requirement into a checklist (`set_requirement_phase({phase:'plan', checklist:[...]})`) — what
+Implement's gate later checks every task against (`upsert_task`'s `covers`) — but the checklist
+itself is never rendered in the dashboard as a list; it's an internal discipline mechanism for the
+coordinator, not something a human is expected to review line by line. The one exception: a
+checklist item can be marked `ambiguous: true` ("a plausible different reader could land on a
+different interpretation than the one I'm about to pick"), and every ambiguous item needs its own
+`add_finding({waitingOnHuman: true})` recording the interpretation picked, before Critique's gate
+lets Plan proceed — checked as a count (N ambiguous items need ≥N `waitingOnHuman` findings for this
+requirement), not a real per-item link. Ambiguous items' *text* (not the rest of the checklist) gets
+a minimal banner in the dashboard header, right where the operator-gate banner shows — a human can
+see what was flagged before treating Plan as settled, without the checklist becoming a general-
+purpose dashboard feature.
+
+**Task evidence.** `upsert_task`/`upsert_tasks` take an optional `doneEvidence` string — the actual
+evidence a task was verified against (test output, a commit SHA, a PR link) — shown in the existing
+task-contract popup (click a Plan-tab row or gantt bar) under its own "Done evidence" section,
+alongside the task's contract. Not enforced — a task can still be marked `done` with no evidence
+recorded — this is for "trust but verify" auditability, not another gate.
+
+**Plan → Docs categories are configurable, not a fixed five fields.** Completing Plan (advancing to
+Implement) requires a `docs` entry — in markdown, mermaid fenced blocks render as real diagrams in
+the dashboard's Plan → Docs view — for every category `list_doc_categories` currently returns, not
+five hardcoded params (`schemaDoc`/`apisDoc`/… no longer exist as separate tool params; it's
+`docs: [{categoryId, text}]` keyed against whatever the list actually contains). A database seeds
+with six categories on first use — `schema`, `apis`, `messages`, `file_structures`, `sequence`,
+`others` — matching the original five plus a new `sequence` category meant for a mermaid
+`sequenceDiagram` block of the requirement's cross-repo call flow. `add_doc_category`/
+`remove_doc_category` let a coordinator add one a particular project needs (e.g. "Auth flow", "Rate
+limits") or drop one that never applies to this kind of project; removing a category stops requiring
+it without deleting any doc text already submitted under its id, so re-adding the same id picks the
+old text back up.
 
 **Cruise control — a dashboard toggle, unlike the phase.** A header button (`Cruise control:
 On/Off`, `meta` key `cruise_control`) flips a plain operational mode, not a judgment call, so
@@ -144,6 +190,18 @@ coordinator (`get_cruise_control`/`set_cruise_control`) can read or flip it, and
 off the same `meta` row. When on, every successful `dispatch` call's result carries an extra
 `cruiseControlNote` field telling the coordinator to check `get_tasks` and queue the next unblocked
 task itself, without waiting to be asked, until the plan is done or something needs a human.
+`get_methodology`'s own Critique-phase guidance changes with the same setting: cruise control on
+keeps the permissive "default to an autonomous FYI finding" framing; off replaces it with a
+4-criteria escalation list (does the requirement owner actually care about this decision, is it hard
+to reverse, is disagreement between reasonable readers likely, etc.) that leans toward
+`waitingOnHuman` instead — most of the reduction in asks was never going to come from the
+coordinator's own framing alone, though, since a repo-level agent has no reason to ever call
+`get_methodology` itself. So turning cruise control on (off → on specifically, not a redundant
+re-toggle, and not turning it off) also queues a one-time, queue-jumping heads-up dispatch to every
+runnable repo, telling its agent to default to deciding things itself rather than stopping to ask,
+same as `set_cruise_control`'s own tool description now says. This is a nudge, not a guarantee — a
+dispatched agent can still choose to ask — but it's the one channel that actually reaches
+repo-level agents at all, since they never read `get_methodology`.
 
 This is **not** a real background loop, and can't be: MCP is pull-only from the coordinator's
 side, confirmed (not just assumed) while building this — a server-initiated MCP notification
@@ -317,28 +375,29 @@ shows up as a VS Code notification with an "Answer" action.
 
 ### Registering the MCP server with a coordinator session
 
-Two options — neither hand-types a path; both are computed from where this extension is actually
-installed (`context.extensionUri`), which differs between an `F5` dev checkout and an installed
-`.vsix`, so a path hardcoded in this README would only ever be right for one of them.
+No process to spawn — the daemon hosts the MCP endpoint itself over HTTP on a loopback port, so
+registration is just a URL (`http://127.0.0.1:<port>/mcp?dbId=<id>`), fetched fresh each time from
+the daemon (the port is only known once its HTTP listener is actually up). Two options:
 
 **Simpler: a `.mcp.json` file.** Run **"Agent Control Center: Create .mcp.json"** from the Command
-Palette (or the walkthrough's button). Writes/merges a `control-center` entry into a `.mcp.json` at
-a project root — plain, reviewable, committable, and auto-discovered by Claude Code for sessions
-rooted there. No CLI invocation, no touching `~/.claude.json`.
+Palette (or the walkthrough's button). Writes/merges a `control-center` entry
+(`{"type":"http","url":"..."}`) into a `.mcp.json` at a project root — plain, reviewable,
+committable, and auto-discovered by Claude Code for sessions rooted there. No CLI invocation, no
+touching `~/.claude.json`.
 
 **Alternative: the `claude mcp add` CLI**, for `~/.claude.json`-based registration instead of a
 file in the repo:
 
 ```bash
-claude mcp add --scope project control-center -- node <this-install's-out>/mcpServer.js --db <this-install's-db-path>
+claude mcp add --scope project --transport http control-center "http://127.0.0.1:<port>/mcp?dbId=default"
 ```
 
 Run **"Agent Control Center: Copy MCP Registration Command"** to get the exact command for *this*
-install on your clipboard rather than typing either path by hand. `--db` isn't optional here —
-without it the server falls back to its own default (`~/.control-center/control-center.db`), a
-different file from the one this install's daemon actually watches, and dispatches sent through it
-would succeed but never be picked up by anything. `--scope project` registers it for sessions run
-from the current project only; use `--scope user` instead for every project on this machine.
+daemon's currently-bound port on your clipboard rather than typing it by hand. `dbId` selects which
+database this session talks to (an opaque label, not a file path — the daemon resolves it to a file
+itself); omit it, or pass `default`, to use the same database the dashboard shows by default.
+`--scope project` registers it for sessions run from the current project only; use `--scope user`
+instead for every project on this machine.
 
 Either way, verify with `claude mcp list` (should show `control-center — ✔ Connected`).
 Registering doesn't reach sessions already running — MCP servers load at session start, not

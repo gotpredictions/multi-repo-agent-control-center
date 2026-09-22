@@ -13,11 +13,11 @@ you can see exactly what it wrote.
 — the CLI alternative, for `~/.claude.json`-based (user- or project-scoped) registration instead of
 a file in the repo. Only copies; nothing runs until you paste it into a terminal yourself.
 
-Either way, both are computed from where this extension is actually installed *and* which DB this
-install's daemon actually watches, not hardcoded (a dev checkout and an installed `.vsix` sit in
-different places, and the DB path — `--db`, always included — matters just as much as the script
-path: without it pointing at the same file the dashboard uses, dispatches sent through MCP would
-succeed but never be picked up by anything).
+Either way, both point at a plain URL (`http://127.0.0.1:<port>/mcp?dbId=<id>`) — no process to
+spawn, since the daemon hosts the MCP endpoint itself over HTTP on a loopback port and fetches its
+own current port fresh each time you run either command, rather than a stale one cached from
+earlier. `dbId` names which database to talk to — an opaque label the daemon resolves to a file
+itself, never a path you have to get right by hand.
 
 This only reaches **new** sessions — one already running won't pick it up without a restart.
 Verify with `claude mcp list`.

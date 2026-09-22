@@ -5,6 +5,8 @@
 <title>Control Center — editor view</title>
 <script src="{{REACT_URI}}"></script>
 <script src="{{REACT_DOM_URI}}"></script>
+<script src="{{MARKED_URI}}"></script>
+<script src="{{MERMAID_URI}}"></script>
 <script src="{{SUPPORT_URI}}"></script>
 </head>
 <body>
@@ -117,9 +119,61 @@ button { font: inherit; }
       <div style="font-size: 14px; font-weight: 600; color: #ffffff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">Agent Control Center</div>
       <div style="display: flex; align-items: center; gap: 14px;">
         <button type="button" aria-pressed="{{ cruiseControl }}" style="{{ cruiseControlBtnStyle }}" onClick="{{ toggleCruiseControl }}"><span style="{{ cruiseControlDotStyle }}"></span>Cruise control: {{ cruiseControlLabel }}</button>
+        <button type="button" aria-pressed="{{ operatorGateEnabled }}" title="When on, a coordinator satisfying every Plan gate does NOT start Implement automatically — it holds until you click Approve below. Off by default." style="{{ operatorGateBtnStyle }}" onClick="{{ toggleOperatorGate }}"><span style="{{ operatorGateDotStyle }}"></span>Operator gate: {{ operatorGateLabel }}</button>
+        <select aria-label="Database" value="{{ currentDbId }}" onChange="{{ switchDatabase }}" style="background: #2a2a2a; color: #cccccc; border: 1px solid #3c3c3c; border-radius: 4px; font-size: 11.5px; padding: 3px 6px;">
+          <sc-for list="{{ databases }}" as="db" hint-placeholder-count="1">
+            <option value="{{ db.id }}" title="{{ db.title }}">{{ db.label }}</option>
+          </sc-for>
+        </select>
+        <button type="button" aria-label="Add a new database" title="Add a new database" onClick="{{ addDatabase }}" style="{{ dbIconBtnStyle }}">+</button>
+        <button type="button" aria-label="Delete this database" title="Delete this database" onClick="{{ deleteDatabase }}" style="{{ dbIconBtnStyle }}">−</button>
         <div style="font-size: 11.5px; color: #8b8b8b;">{{ repoCountLabel }}</div>
       </div>
     </div>
+
+    <!-- The requirement's own name/description — "which feature used this
+         DB" — shown right under the title bar so it doesn't take
+         switching tabs or hovering the dropdown to see. Title comes from
+         set_requirement_phase's title param (settable at any phase);
+         summary is set once Critique completes (see mcp.ts). Either can
+         be present without the other (e.g. title set on a
+         still-in-Critique requirement with no summary yet). -->
+    <sc-if value="{{ hasRequirementHeader }}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 2px; margin-top: -8px;">
+        <sc-if value="{{ hasRequirementTitle }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size: 12.5px; color: #cccccc;">{{ requirementTitle }}</div>
+        </sc-if>
+        <sc-if value="{{ hasCurrentDatabaseSummary }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size: 11.5px; color: #9d9d9d; line-height: 1.4;">{{ currentDatabaseSummary }}</div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- The optional operator-approval gate's actual effect — see the
+         "Operator gate" header toggle. All of Plan's gates already passed
+         (the coordinator's set_requirement_phase({phase:'implement'})
+         call succeeded up to this point — see mcp.ts); this is the one
+         remaining step, and only a human clicking this button performs it. -->
+    <sc-if value="{{ operatorGatePending }}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; margin-top: -8px; background: #2a2410; border: 1px solid #6b551c; border-radius: 4px;">
+        <div style="font-size: 11.5px; color: #d7ba7d;">Held for operator approval — every Plan gate is satisfied (tasks, checklist coverage, contract docs). Dispatches are blocked until you approve moving to Implement.</div>
+        <button type="button" style="{{ approveImplementBtnStyle }}" onClick="{{ approveImplement }}">Approve → Implement</button>
+      </div>
+    </sc-if>
+
+    <!-- The ONE narrow exception to "the checklist is internal, never shown
+         here" — items the coordinator itself flagged as ambiguous while
+         writing the checklist (see set_requirement_phase's checklist param
+         in mcp.ts). Not the checklist itself: just these texts, so a human
+         can see what was flagged before treating Plan as settled. -->
+    <sc-if value="{{ hasAmbiguousChecklist }}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; margin-top: -8px; background: #142a3a; border: 1px solid #1c4b6b; border-radius: 4px;">
+        <div style="font-size: 11.5px; color: #9cdcfe;">{{ ambiguousChecklistLabel }}</div>
+        <sc-for list="{{ ambiguousChecklistRows }}" as="row" hint-placeholder-count="2">
+          <div style="font-size: 11.5px; color: #cccccc; padding-left: 10px;">· {{ row.text }}</div>
+        </sc-for>
+      </div>
+    </sc-if>
 
     <div style="display: flex; align-items: center; gap: 4px;">
       <span style="font-size: 12.5px; color: #8b8b8b; margin-right: 4px;">Phase:</span>
@@ -185,6 +239,23 @@ button { font: inherit; }
         </div>
       </sc-if>
 
+      <sc-if value="{{ contractPopupOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position: absolute; left: -24px; right: -24px; top: -8px; bottom: 0; background: rgba(20, 20, 20, 0.88); display: flex; align-items: flex-start; justify-content: center; padding-top: 14px; z-index: 50;" onClick="{{ closeTaskContract }}">
+          <div style="width: 640px; max-width: calc(100% - 48px); box-sizing: border-box; background: #252526; border: 1px solid #454545; border-radius: 6px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;" onClick="{{ stopPropagation }}">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+              <div style="font-size: 12.5px; color: #ffffff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ contractTitle }}</div>
+              <button type="button" style="{{ cancelBtnStyle }}" onClick="{{ closeTaskContract }}">Close</button>
+            </div>
+            <span style="font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Contract</span>
+            <div class="cc-mono" style="{{ contractBodyStyle }}">{{ contractBody }}</div>
+            <sc-if value="{{ hasDoneEvidence }}" hint-placeholder-val="{{ false }}">
+              <span style="font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Done evidence</span>
+              <div class="cc-mono" style="max-height: 200px; overflow-y: auto; padding: 8px 12px; background: #1f1f1f; border: 1px solid #2f3b46; border-radius: 4px; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #cccccc;">{{ doneEvidenceBody }}</div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
       <sc-if value="{{ isRepos }}" hint-placeholder-val="{{ true }}">
         <div style="display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto;">
 
@@ -195,6 +266,9 @@ button { font: inherit; }
               <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f14c4c;"></span>needs human</span>
               <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1px solid #6e6e6e;"></span>stopped</span>
               <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #6e6e6e; box-shadow: 0 0 0 2px #6b551c;"></span>dispatches paused</span>
+              <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1px solid #8b8b8b;"></span>PR open</span>
+              <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1px solid #a371f7;"></span>PR merged</span>
+              <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1px solid #f14c4c;"></span>PR closed</span>
               <span>click a dot for start · stop · watch</span>
             </div>
             <button type="button" style="{{ dispatchAllBtnStyle }}" onClick="{{ dispatchToAll }}">Dispatch to all queues</button>
@@ -219,7 +293,16 @@ button { font: inherit; }
                 </div>
                 <div class="cc-mono" style="width: 230px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.repo }}</div>
                 <div style="width: 120px; color: #9d9d9d;">{{ row.phase }}</div>
-                <div style="flex-grow: 1; padding-right: 10px; color: #9d9d9d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ row.prs }}</div>
+                <div style="flex-grow: 1; padding-right: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                  <sc-if value="{{ row.hasPullRequests }}" hint-placeholder-val="{{ false }}">
+                    <sc-for list="{{ row.pullRequests }}" as="pr" hint-placeholder-count="2">
+                      <span style="{{ pr.style }}">{{ pr.label }}</span>
+                    </sc-for>
+                  </sc-if>
+                  <sc-if value="{{ row.noPullRequests }}" hint-placeholder-val="{{ true }}">
+                    <span style="color: #9d9d9d;">{{ row.prs }}</span>
+                  </sc-if>
+                </div>
                 <div style="width: 170px;">
                   <button type="button" style="{{ row.queueBtnStyle }}" onClick="{{ row.openDispatches }}">{{ row.queueLabel }}</button>
                 </div>
@@ -287,7 +370,11 @@ button { font: inherit; }
         <div style="display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto;">
 
           <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 0 10px 0;">
-            <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Rollout sequence — fixed order, do not skip ahead</div>
+            <div style="display: flex; align-items: center; gap: 14px;">
+              <div style="font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Rollout sequence — fixed order, do not skip ahead</div>
+              <span style="display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: #8b8b8b;"><span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #4ec9b0;"></span>has a contract</span>
+              <span style="font-size: 10.5px; color: #8b8b8b;">click a task for its contract</span>
+            </div>
             <div style="display: flex; align-items: center; gap: 10px;">
               <sc-if value="{{ isPlanGantt }}" hint-placeholder-val="{{ true }}">
                 <button type="button" style="{{ linksBtnStyle }}" onClick="{{ toggleLinks }}"><span style="{{ linksDotStyle }}"></span>Dependency links</button>
@@ -295,6 +382,7 @@ button { font: inherit; }
               <div style="display: flex; border: 1px solid #3c3c3c; border-radius: 4px; overflow: hidden;">
                 <button type="button" style="{{ listBtnStyle }}" onClick="{{ showList }}">List</button>
                 <button type="button" style="{{ ganttBtnStyle }}" onClick="{{ showGantt }}">Gantt</button>
+                <button type="button" style="{{ docsBtnStyle }}" onClick="{{ showDocs }}">Docs</button>
               </div>
             </div>
           </div>
@@ -321,9 +409,9 @@ button { font: inherit; }
               </div>
 
               <sc-for list="{{ planRows }}" as="row" hint-placeholder-count="12">
-                <div style="display: table-row; font-size: 11.5px; border-top: 1px solid #2b2b2b;">
+                <div style="display: table-row; font-size: 11.5px; border-top: 1px solid #2b2b2b; cursor: pointer;" onClick="{{ row.openContract }}" title="Click for this task's contract">
                   <div class="cc-mono" style="display: table-cell; vertical-align: middle; height: 18px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #9d9d9d; font-size: 11px;">{{ row.repo }}</div>
-                  <div style="display: table-cell; vertical-align: middle; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cccccc;">{{ row.task }}</div>
+                  <div style="display: table-cell; vertical-align: middle; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cccccc;"><span style="{{ row.contractDotStyle }}"></span>{{ row.task }}</div>
                   <div style="display: table-cell; vertical-align: middle; padding-right: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8b8b8b;">{{ row.deps }}</div>
                   <div style="display: table-cell; vertical-align: middle; color: #9d9d9d;">{{ row.est }}</div>
                   <div style="display: table-cell; vertical-align: middle; white-space: nowrap;">
@@ -350,7 +438,7 @@ button { font: inherit; }
               </div>
 
               <sc-for list="{{ ganttRows }}" as="row" hint-placeholder-count="12">
-                <div class="cc-gantt-row" style="padding: 0; height: 18px;">
+                <div class="cc-gantt-row" style="padding: 0; height: 18px; cursor: pointer;" onClick="{{ row.openContract }}" title="Click for this task's contract">
                   <div class="cc-mono" style="width: 150px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #9d9d9d; font-size: 11px;">{{ row.repo }}</div>
                   <div style="width: 200px; padding-right: 10px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cccccc; font-size: 11.5px;">{{ row.task }}</div>
                   <div style="position: relative; width: 550px; height: 18px; background: repeating-linear-gradient(to right, #2b2b2b 0 1px, transparent 1px 50px);">
@@ -377,9 +465,31 @@ button { font: inherit; }
                 <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 7px; border-radius: 2px; background: #8a6d1f;"></span>active</span>
                 <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 7px; border-radius: 2px; background: #7a3030;"></span>blocked</span>
                 <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 7px; border-radius: 2px; border: 1px dashed #5a5a5a;"></span>not started</span>
-                <span>hours of work, not calendar days — arrows are dependencies</span>
+                <span>Arrows are dependencies. Bar lengths are estimated by the coordinator.</span>
               </div>
             </div>
+            </div>
+          </sc-if>
+
+          <!-- Inter-repo/component contract documentation, set once when
+               the requirement advances to Implement (see mcp.ts's
+               set_requirement_phase docs param). The category LIST itself
+               is configurable and server-driven (db.ts's doc_categories,
+               seeded with schema/apis/messages/file_structures/sequence/
+               others — see list_doc_categories/add_doc_category), not a
+               fixed set of tabs. Rendered from markdown (mermaid fenced
+               blocks become real diagrams — see renderMarkdown/
+               docsContentRef) via a ref callback rather than a template
+               binding, since raw HTML has to go in as real innerHTML, not
+               escaped text content. -->
+          <sc-if value="{{ isPlanDocs }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto;">
+              <div style="display: flex; align-items: center; gap: 6px; padding-bottom: 10px;">
+                <sc-for list="{{ docCategoryTabs }}" as="cat" hint-placeholder-count="6">
+                  <button type="button" style="{{ cat.style }}" onClick="{{ cat.pick }}">{{ cat.label }}</button>
+                </sc-for>
+              </div>
+              <div class="cc-mono" ref="{{ docsContentRef }}" style="font-size: 12px; line-height: 1.6; color: #cccccc; padding: 4px 0;"></div>
             </div>
           </sc-if>
 
@@ -427,15 +537,22 @@ button { font: inherit; }
               <div style="display: table-cell; width: 90px; padding: 0 10px 8px 0;">Phase</div>
               <div style="display: table-cell; width: 180px; padding: 0 10px 8px 0;">Disposition</div>
               <div style="display: table-cell; width: 130px; padding: 0 0 8px 0;">Decided by</div>
+              <div style="display: table-cell; width: 80px; padding: 0 0 8px 0;">Dispute</div>
             </div>
 
             <sc-for list="{{ findingRows }}" as="row" hint-placeholder-count="7">
-              <div style="display: table-row; border-top: 1px solid #2b2b2b;">
+              <div style="{{ row.rowStyle }}">
                 <div class="cc-mono" style="display: table-cell; vertical-align: top; padding: 8px 10px 8px 0; color: #9d9d9d; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.repo }}</div>
                 <div style="display: table-cell; vertical-align: top; padding: 8px 10px 8px 0;">
                   <div style="display: flex; align-items: flex-start; gap: 9px;">
                     <span style="{{ row.dotStyle }}margin-top: 6px;"></span>
                     <span style="white-space: pre-wrap; word-break: break-word; line-height: 1.5;">{{ row.text }}</span>
+                    <sc-if value="{{ row.flagForReview }}" hint-placeholder-val="{{ false }}">
+                      <span style="{{ flagBadgeStyle }}">Please review</span>
+                    </sc-if>
+                    <sc-if value="{{ row.disputed }}" hint-placeholder-val="{{ false }}">
+                      <span style="{{ disputedBadgeStyle }}">Disputed</span>
+                    </sc-if>
                   </div>
 
                   <sc-if value="{{ row.showAnswerBtn }}" hint-placeholder-val="{{ false }}">
@@ -459,6 +576,9 @@ button { font: inherit; }
                 <div style="display: table-cell; vertical-align: top; padding: 8px 10px 8px 0; color: #9d9d9d; font-size: 11.5px;">{{ row.phase }}</div>
                 <div style="display: table-cell; vertical-align: top; padding: 8px 10px 8px 0; font-size: 11.5px; color: #cccccc;">{{ row.disposition }}</div>
                 <div style="display: table-cell; vertical-align: top; padding: 8px 0;"><span style="{{ row.byStyle }}">{{ row.byLabel }}</span></div>
+                <div style="display: table-cell; vertical-align: top; padding: 8px 0;">
+                  <button type="button" style="{{ row.disputeBtnStyle }}" onClick="{{ row.toggleDispute }}">{{ row.disputeBtnLabel }}</button>
+                </div>
               </div>
             </sc-for>
           </div>
@@ -491,6 +611,49 @@ button { font: inherit; }
         </div>
       </sc-if>
 
+      <!-- One card per requirement-close submission — the coordinator's own
+           required lessons/decisionsToRecord/futureImprovements (structured,
+           three labeled sections) and each runnable repo's own final report
+           from the automatic learnings dispatch queued at the same time
+           (free-form prose, since that's a dispatch response, not a
+           validated tool call — see mcp.ts/agentRunner.ts). Newest
+           requirement first, matching db.ts's listLearnings order. -->
+      <sc-if value="{{ isLearnings }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; gap: 10px;">
+          <sc-for list="{{ learningRows }}" as="row" hint-placeholder-count="4">
+            <div style="border: 1px solid #2b2b2b; border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+                <div style="font-size: 12px; color: #ffffff;">{{ row.repo }}</div>
+                <div style="font-size: 10.5px; color: #8b8b8b; white-space: nowrap;">{{ row.requirementTitle }} · {{ row.createdAt }}</div>
+              </div>
+
+              <sc-if value="{{ row.isStructured }}" hint-placeholder-val="{{ true }}">
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <span style="font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Lessons</span>
+                  <div class="cc-mono" style="{{ learningBoxStyle }}">{{ row.lessons }}</div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <span style="font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Decisions to record</span>
+                  <div class="cc-mono" style="{{ learningBoxStyle }}">{{ row.decisions }}</div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <span style="font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #8b8b8b;">Future improvements</span>
+                  <div class="cc-mono" style="{{ learningBoxStyle }}">{{ row.futureImprovements }}</div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ row.isFreeform }}" hint-placeholder-val="{{ false }}">
+                <div class="cc-mono" style="{{ learningBoxStyle }}">{{ row.text }}</div>
+              </sc-if>
+            </div>
+          </sc-for>
+
+          <sc-if value="{{ learningsEmpty }}" hint-placeholder-val="{{ true }}">
+            <div style="padding: 8px 0; font-size: 11.5px; color: #8b8b8b;">No requirement has reached Done yet — this fills in once one does (see set_requirement_phase in get_methodology).</div>
+          </sc-if>
+        </div>
+      </sc-if>
+
     </div>
 
   </div>
@@ -503,6 +666,21 @@ button { font: inherit; }
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":960,"height":640}}'>
 var __bootstrap = (typeof window !== 'undefined' && window.__CC_BOOTSTRAP__) || null;
+// Fallback shape for previewing this file raw (no real extension-injected
+// bootstrap) — matches what the daemon's listDatabases actually returns
+// now (objects, not bare ids), so the dropdown/tooltip code below has one
+// shape to handle instead of two.
+var DEFAULT_DATABASES = [{ id: 'default', requirementPhase: null, requirementTitle: null, requirementSummary: null, repoCount: 0 }];
+var DEFAULT_PLAN_DOCS = { schema: '', apis: '', messages: '', file_structures: '', sequence: '', others: '' };
+// Preview-only fallback (no real bootstrap) — matches db.ts's own seed list.
+var DEFAULT_DOC_CATEGORIES = [
+  { id: 'schema', label: 'Schema' },
+  { id: 'apis', label: 'APIs' },
+  { id: 'messages', label: 'Messages' },
+  { id: 'file_structures', label: 'File Structures' },
+  { id: 'sequence', label: 'Sequence' },
+  { id: 'others', label: 'Others' }
+];
 // This whole <script type="text/x-dc"> block is inert to the browser (not a
 // real MIME type) — the dc-runtime eval's it itself, on purpose, more than
 // once: once to boot the app, and again whenever its own self-refresh path
@@ -518,14 +696,61 @@ function notifyHost(msg) {
   if (__vscode) { try { __vscode.postMessage(msg); } catch (e) { /* not fatal — next daemon push reconciles */ } }
 }
 
+// Plan → Docs view support (contract documentation, see mcp.ts's
+// set_requirement_phase schemaDoc/apisDoc/etc). Registered once, not
+// per-render: marked.use() mutates its shared default instance, and this
+// override (route a ```mermaid fenced block to a plain <div class="mermaid">
+// instead of the default <pre><code>) is the same regardless of which doc
+// is currently showing.
+if (typeof marked !== 'undefined' && !window.__ccMarkedConfigured) {
+  window.__ccMarkedConfigured = true;
+  marked.use({
+    renderer: {
+      code: function (tok) {
+        if (tok && tok.lang === 'mermaid') {
+          var esc = String(tok.text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return '<div class="mermaid">' + esc + '</div>';
+        }
+        return false; // falls back to the default code-block renderer
+      }
+    }
+  });
+}
+if (typeof mermaid !== 'undefined' && !window.__ccMermaidConfigured) {
+  window.__ccMermaidConfigured = true;
+  mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+}
+
+// Markdown -> HTML for a single plan doc, no library the mermaid-block
+// special case above didn't touch. '' is not "provided empty" here —
+// the whole point of the gate this feeds is that a category is either a
+// real doc or an explicit "None or Not Applicable" (see mcp.ts), so an
+// actually-empty string only happens before the requirement has ever
+// completed Plan at all.
+function renderMarkdown(mdText) {
+  var text = (mdText || '').trim();
+  if (!text) return '<span style="color:#6e6e6e;">Not provided yet — set on advancing to Implement.</span>';
+  if (typeof marked === 'undefined') return '<span style="color:#f48771;">Markdown renderer unavailable.</span>';
+  try {
+    return marked.parse(text);
+  } catch (e) {
+    return '<span style="color:#f48771;">Failed to render markdown.</span>';
+  }
+}
+
 class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.state = {
       tab: 'repos',
       requirementPhase: __bootstrap ? __bootstrap.requirementPhase : null,
+      requirementTitle: __bootstrap ? __bootstrap.requirementTitle : null,
       cruiseControl: __bootstrap ? !!__bootstrap.cruiseControl : false,
+      databases: __bootstrap && __bootstrap.databases ? __bootstrap.databases : DEFAULT_DATABASES,
+      currentDbId: __bootstrap && __bootstrap.currentDbId ? __bootstrap.currentDbId : 'default',
       planView: 'list',
+      docsCategory: null,
+      docCategories: __bootstrap && __bootstrap.docCategories ? __bootstrap.docCategories : DEFAULT_DOC_CATEGORIES,
       showLinks: true,
       answering: null,
       draft: '',
@@ -536,6 +761,7 @@ class Component extends DCLogic {
       menuRect: null,
       drawerFor: null,
       drawerMode: '',
+      contractFor: null,
       composerRepo: null,
       composerDispatch: null,
       composerText: '',
@@ -546,7 +772,12 @@ class Component extends DCLogic {
       taskDefs: __bootstrap ? __bootstrap.tasks : [],
       repos: __bootstrap ? __bootstrap.repos : [],
       items: __bootstrap ? __bootstrap.items : [],
-      log: __bootstrap ? __bootstrap.log : []
+      log: __bootstrap ? __bootstrap.log : [],
+      learnings: __bootstrap ? __bootstrap.learnings : [],
+      checklist: __bootstrap ? __bootstrap.checklist : [],
+      planDocs: __bootstrap && __bootstrap.planDocs ? __bootstrap.planDocs : DEFAULT_PLAN_DOCS,
+      operatorGateEnabled: __bootstrap ? !!__bootstrap.operatorGateEnabled : false,
+      operatorGatePending: __bootstrap ? !!__bootstrap.operatorGatePending : false
     };
 
     // After the first full render, the extension host pushes fresh data
@@ -567,8 +798,17 @@ class Component extends DCLogic {
       items: data.items || [],
       taskDefs: data.tasks || [],
       log: data.log || [],
+      learnings: data.learnings || [],
+      checklist: data.checklist || [],
+      docCategories: data.docCategories && data.docCategories.length ? data.docCategories : DEFAULT_DOC_CATEGORIES,
+      planDocs: data.planDocs || DEFAULT_PLAN_DOCS,
+      operatorGateEnabled: !!data.operatorGateEnabled,
+      operatorGatePending: !!data.operatorGatePending,
       requirementPhase: data.requirementPhase || null,
-      cruiseControl: !!data.cruiseControl
+      requirementTitle: data.requirementTitle || null,
+      cruiseControl: !!data.cruiseControl,
+      databases: data.databases || DEFAULT_DATABASES,
+      currentDbId: data.currentDbId || 'default'
     });
   }
 
@@ -584,8 +824,31 @@ class Component extends DCLogic {
     // explicit requirement), so every click handler here is gone, not
     // just hidden.
     var phase = this.state.requirementPhase || null;
+    var requirementTitle = this.state.requirementTitle || '';
     var planView = this.state.planView || 'list';
     var showLinks = this.state.showLinks !== false;
+    var planDocs = this.state.planDocs || DEFAULT_PLAN_DOCS;
+    // The category LIST (ids, labels, order) is server-driven and
+    // configurable (see db.ts's doc_categories / mcp.ts's
+    // list_doc_categories, add_doc_category) — no longer a fixed 5-entry
+    // array here. Each doc's own TEXT still comes from planDocs, keyed by
+    // the category's id.
+    var docCategories = this.state.docCategories && this.state.docCategories.length ? this.state.docCategories : DEFAULT_DOC_CATEGORIES;
+    var DOC_CATEGORIES = docCategories.map(function (c) {
+      return { id: c.id, label: c.label, text: planDocs[c.id] || '' };
+    });
+    var docsCategory = this.state.docsCategory || (DOC_CATEGORIES[0] && DOC_CATEGORIES[0].id) || 'schema';
+    var currentDocEntry = DOC_CATEGORIES.filter(function (c) { return c.id === docsCategory; })[0] || DOC_CATEGORIES[0] || { text: '' };
+    var currentDocHtml = renderMarkdown(currentDocEntry.text);
+    var docCategoryTabs = DOC_CATEGORIES.map(function (c) {
+      var active = c.id === docsCategory;
+      return {
+        id: c.id,
+        label: c.label,
+        style: 'padding: 3px 10px; border-radius: 4px; font-size: 11.5px; cursor: pointer; border: 1px solid ' + (active ? '#0e639c' : '#3c3c3c') + '; background: ' + (active ? '#0e639c' : 'transparent') + '; color: ' + (active ? '#ffffff' : '#9d9d9d') + ';',
+        pick: function () { self.setState({ docsCategory: c.id }); }
+      };
+    });
     // Unlike requirementPhase above, this one IS a plain UI toggle — an
     // operational on/off switch, not a judgment call about whether a gate
     // is actually satisfied, so a dashboard click is the right way to set
@@ -594,6 +857,28 @@ class Component extends DCLogic {
     // can flip it). Optimistic local update on click; the next daemon
     // snapshot reconciles it same as every other toggle here.
     var cruiseControl = this.state.cruiseControl === true;
+    // Unlike cruiseControl, this ISN'T purely a UI toggle reconciled by
+    // the next snapshot — it's read back by mcp.ts's set_requirement_phase
+    // gate, and (per its own design) is deliberately NOT settable from
+    // any MCP tool, only here. operatorGatePending is never toggled
+    // directly; it's a daemon-computed fact (see approveImplement below).
+    var operatorGateEnabled = this.state.operatorGateEnabled === true;
+    var operatorGatePending = this.state.operatorGatePending === true;
+    // Which sqlite-backed database this dashboard is currently showing —
+    // a plain dropdown, not a judgment call, so a click is the right way
+    // to change it (mirrors the cruiseControl toggle just above: optimistic
+    // local setState, reconciled by the next daemon snapshot for real).
+    var databases = this.state.databases || DEFAULT_DATABASES;
+    var currentDbId = this.state.currentDbId || 'default';
+    var databaseOptions = databases.map(function (d) {
+      var bits = [];
+      if (d.requirementTitle) bits.push(d.requirementTitle);
+      if (d.requirementPhase) bits.push('(' + d.requirementPhase + ')');
+      bits.push(d.repoCount === 1 ? '1 repo' : d.repoCount + ' repos');
+      var tooltip = (d.requirementSummary || 'No summary yet — set on completing Critique.') + '\n' + bits.join(' · ');
+      return { id: d.id, label: d.id, title: tooltip };
+    });
+    var currentDatabase = databases.find(function (d) { return d.id === currentDbId; }) || null;
 
     var phaseDefs = [
       { id: 'critique', label: 'Critique' },
@@ -637,7 +922,8 @@ class Component extends DCLogic {
       { id: 'plan', label: 'Plan' },
       { id: 'repos', label: 'Repos' },
       { id: 'findings', label: 'Findings & inputs' },
-      { id: 'log', label: 'Log' }
+      { id: 'log', label: 'Log' },
+      { id: 'learnings', label: 'Learnings' }
     ];
     var tabBase = 'padding: 0 0 8px 0; border: none; background: none; font-size: 12.5px; cursor: pointer; ';
     var tabs = tabDefs.map(function (t) {
@@ -660,7 +946,7 @@ class Component extends DCLogic {
     var ganttTicks = [];
     for (var h = 0; h <= 40; h += 4) {
       ganttTicks.push({
-        label: h + 'h',
+        label: String(h),
         style: 'position: absolute; left: ' + (h * pxH + 3) + 'px; top: 0;'
       });
     }
@@ -679,6 +965,8 @@ class Component extends DCLogic {
     var statusLabels = { done: 'Done', active: 'Active', blocking: 'Blocked', todo: 'Not started' };
     var statusTextColors = { done: '#89d185', active: '#d7ba7d', blocking: '#f48771', todo: '#9d9d9d' };
     var statusDotColors = { done: '#89d185', active: '#cca700', blocking: '#f14c4c' };
+    var openTaskContract = function (taskId) { self.setState({ contractFor: taskId }); };
+
     var planRows = taskDefs.map(function (t) {
       var deps = (t.deps || []).map(function (id) {
         var d = taskDefs[indexById[id]];
@@ -694,7 +982,19 @@ class Component extends DCLogic {
         dotStyle: 'width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; '
           + (statusDotColors[t.status]
             ? 'background: ' + statusDotColors[t.status] + ';'
-            : 'border: 1px solid #6e6e6e;')
+            : 'border: 1px solid #6e6e6e;'),
+        // A quick "does this task have a contract on file" glance,
+        // without opening the popup — filled teal dot when one's
+        // recorded, hollow when it isn't (whether that's a real gap or
+        // an exempt milestone/scaffold task; the popup itself always
+        // explains which).
+        contractDotStyle: 'display: inline-block; vertical-align: middle; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; '
+          + (t.contract ? 'background: #4ec9b0;' : 'border: 1px solid #5a5a5a;'),
+        // Click anywhere on the row to see this task's contract — same
+        // click target whether it actually has one or is exempt
+        // (noContractNeeded/milestone), so there's one consistent place
+        // to check rather than a hover-only affordance that's easy to miss.
+        openContract: function () { openTaskContract(t.id); }
       };
     });
 
@@ -708,8 +1008,13 @@ class Component extends DCLogic {
           + Math.max(Math.round(t.dur * pxH) - 3, 8) + 'px; border-radius: 3px; box-sizing: border-box; '
           + fills[t.status];
       }
-      return { repo: t.repo, task: t.task, barStyle: style };
+      return { repo: t.repo, task: t.task, barStyle: style, openContract: function () { openTaskContract(t.id); } };
     });
+
+    var contractTask = null;
+    for (var ci = 0; ci < taskDefs.length; ci++) {
+      if (taskDefs[ci].id === this.state.contractFor) { contractTask = taskDefs[ci]; break; }
+    }
 
     var ganttLinks = [];
     taskDefs.forEach(function (t, i) {
@@ -925,10 +1230,27 @@ class Component extends DCLogic {
         pick: function () { self.setState({ drawerFor: r.id, drawerMode: 'dispatches', menuFor: null }); }
       });
 
+      var prColors = { open: '#8b8b8b', merged: '#a371f7', closed: '#f14c4c' };
+      var pullRequests = (r.pullRequests || []).map(function (p) {
+        var color = prColors[p.status] || prColors.open;
+        return {
+          label: '#' + p.number,
+          style: 'display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 10px; font-size: 10.5px; margin-right: 4px; border: 1px solid ' + color + '; color: ' + color + ';'
+            + (p.status === 'closed' ? ' text-decoration: line-through;' : '')
+        };
+      });
+
       return {
         repo: r.repo,
         phase: r.phase,
         prs: r.prs,
+        pullRequests: pullRequests,
+        // Structured, auto-tracked PRs (agentRunner.ts) take over the
+        // column once any exist; the old plain-text prs field (still
+        // settable via add_repo) is only shown as a fallback for a repo
+        // that has no auto-tracked PRs yet.
+        hasPullRequests: pullRequests.length > 0,
+        noPullRequests: pullRequests.length === 0,
         dotStyle: 'display: block; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box; '
           + agentDots[r.agent] + (r.paused ? ' box-shadow: 0 0 0 2px #6b551c;' : ''),
         dotBtnStyle: 'display: flex; align-items: center; justify-content: center; width: 22px; height: 20px; padding: 0; border: none; background: none; cursor: pointer;',
@@ -1040,7 +1362,12 @@ class Component extends DCLogic {
     };
     var byLabels = { ai: 'AI', wait: 'Waiting — human', human: 'Human' };
 
+    var disputeBtnBase = 'padding: 3px 10px; border-radius: 3px; font-size: 11px; cursor: pointer; ';
+    var disputeBtnOff = 'border: 1px solid #5a2f2f; background: transparent; color: #f48771;';
+    var disputeBtnOn = 'border: 1px solid #a34141; background: #4a1f1f; color: #ffffff;';
+
     var findingRows = items.map(function (it) {
+      var disputed = !!it.disputed;
       return {
         repo: it.repo,
         text: it.text,
@@ -1053,6 +1380,20 @@ class Component extends DCLogic {
         isAnswering: answering === it.id,
         hasAnswer: !!it.answer,
         answer: it.answer,
+        flagForReview: !!it.flagForReview,
+        disputed: disputed,
+        // Disputed rows get a visible left edge in the table so a
+        // pushed-back finding doesn't blend into the rest of the log —
+        // matches the "please skim this again" intent of a dispute.
+        rowStyle: 'display: table-row; border-top: 1px solid #2b2b2b;'
+          + (disputed ? ' box-shadow: inset 3px 0 0 #a34141;' : ''),
+        disputeBtnStyle: disputeBtnBase + (disputed ? disputeBtnOn : disputeBtnOff),
+        disputeBtnLabel: disputed ? 'Un-dispute' : 'Dispute',
+        toggleDispute: function () {
+          var next = !disputed;
+          notifyHost({ type: 'setFindingDisputed', findingId: it.id, disputed: next });
+          self.setState({ items: patchItem(it.id, { disputed: next }) });
+        },
         startAnswer: function () { self.setState({ answering: it.id, draft: '' }); },
         saveAnswer: function () {
           var text = (self.state.draft || '').trim();
@@ -1068,6 +1409,12 @@ class Component extends DCLogic {
     });
 
     var waitingCount = items.filter(function (it) { return it.by === 'wait'; }).length;
+    // Already filtered to ambiguous-only server-side (extension.ts never
+    // sends the rest of the checklist to this webview at all) — no
+    // further filtering needed here, just mapping to display rows.
+    var ambiguousChecklistRows = (this.state.checklist || []).map(function (c) {
+      return { text: c.text };
+    });
     var fieldStyle = 'box-sizing: border-box; height: 26px; padding: 0 8px; background: #1f1f1f; border: 1px solid #3c3c3c; border-radius: 3px; color: #cccccc; font-size: 11.5px; ';
     var smallBtn = 'padding: 4px 12px; border-radius: 3px; font-size: 11.5px; cursor: pointer; ';
 
@@ -1080,12 +1427,24 @@ class Component extends DCLogic {
       isRepos: tab === 'repos',
       isFindings: tab === 'findings',
       isLog: tab === 'log',
+      isLearnings: tab === 'learnings',
       isPlanList: planView === 'list',
       isPlanGantt: planView === 'gantt',
+      isPlanDocs: planView === 'docs',
       listBtnStyle: segBase + (planView === 'list' ? segOn : segOff),
       ganttBtnStyle: segBase + (planView === 'gantt' ? segOn : segOff),
+      docsBtnStyle: segBase + (planView === 'docs' ? segOn : segOff),
       showList: function () { self.setState({ planView: 'list' }); },
       showGantt: function () { self.setState({ planView: 'gantt' }); },
+      showDocs: function () { self.setState({ planView: 'docs' }); },
+      docCategoryTabs: docCategoryTabs,
+      docsContentRef: function (node) {
+        if (!node) return;
+        node.innerHTML = currentDocHtml;
+        if (typeof mermaid !== 'undefined') {
+          try { mermaid.run({ nodes: node.querySelectorAll('.mermaid') }); } catch (e) { /* a malformed diagram shouldn't take the rest of the page down */ }
+        }
+      },
       showLinks: showLinks,
       toggleLinks: function () { self.setState({ showLinks: !showLinks }); },
       linksBtnStyle: 'display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 4px; font-size: 11.5px; cursor: pointer; '
@@ -1106,8 +1465,50 @@ class Component extends DCLogic {
           : 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;'),
       cruiseControlDotStyle: 'width: 7px; height: 7px; border-radius: 50%; '
         + (cruiseControl ? 'background: #89d185;' : 'border: 1px solid #6e6e6e;'),
+      operatorGateEnabled: operatorGateEnabled,
+      operatorGateLabel: operatorGateEnabled ? 'On' : 'Off',
+      toggleOperatorGate: function () {
+        notifyHost({ type: 'setOperatorGate', on: !operatorGateEnabled });
+        self.setState({ operatorGateEnabled: !operatorGateEnabled });
+      },
+      operatorGateBtnStyle: 'display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 4px; font-size: 11.5px; cursor: pointer; '
+        + (operatorGateEnabled
+          ? 'border: 1px solid #6b551c; background: #2a2410; color: #cccccc;'
+          : 'border: 1px solid #3c3c3c; background: transparent; color: #9d9d9d;'),
+      operatorGateDotStyle: 'width: 7px; height: 7px; border-radius: 50%; '
+        + (operatorGateEnabled ? 'background: #d7ba7d;' : 'border: 1px solid #6e6e6e;'),
+      operatorGatePending: operatorGatePending,
+      approveImplement: function () { notifyHost({ type: 'approveImplement' }); },
+      approveImplementBtnStyle: 'padding: 4px 12px; border-radius: 3px; border: 1px solid #6b551c; background: #3a2f10; color: #d7ba7d; font-size: 11.5px; cursor: pointer; white-space: nowrap;',
       repoRows: repoRows,
       repoCountLabel: repos.length === 0 ? 'no repos tracked' : (repos.length === 1 ? '1 repo tracked' : repos.length + ' repos tracked'),
+      databases: databaseOptions,
+      currentDbId: currentDbId,
+      // "Which feature used this DB" — the current database's own
+      // requirement summary, shown right in the header so it doesn't
+      // require hovering the dropdown to see. Empty until that database's
+      // requirement completes Critique (see mcp.ts's set_requirement_phase).
+      currentDatabaseSummary: currentDatabase && currentDatabase.requirementSummary
+        ? currentDatabase.requirementSummary
+        : '',
+      hasCurrentDatabaseSummary: !!(currentDatabase && currentDatabase.requirementSummary),
+      requirementTitle: requirementTitle,
+      hasRequirementTitle: !!requirementTitle,
+      hasRequirementHeader: !!requirementTitle || !!(currentDatabase && currentDatabase.requirementSummary),
+      switchDatabase: function (e) {
+        var dbId = e.target.value;
+        notifyHost({ type: 'switchDatabase', dbId: dbId });
+        self.setState({ currentDbId: dbId });
+      },
+      // Both just notify the host — the actual id prompt (add) and the
+      // confirmation dialog (delete) are native VS Code UI
+      // (showInputBox/showWarningMessage), not something built into this
+      // webview, so there's nothing to do here beyond asking for it. The
+      // next daemon snapshot (or, for delete, the extension's own
+      // resync) reconciles the dropdown either way.
+      dbIconBtnStyle: 'width: 20px; height: 20px; padding: 0; border: 1px solid #3c3c3c; border-radius: 4px; background: transparent; color: #cccccc; font-size: 13px; line-height: 1; cursor: pointer;',
+      addDatabase: function () { notifyHost({ type: 'createDatabase' }); },
+      deleteDatabase: function () { notifyHost({ type: 'deleteDatabase' }); },
       closeDrawer: function () { self.setState({ drawerFor: null, drawerMode: '' }); },
       dispatchToAll: function () {
         self.setState({ composerScope: 'all', composerRepo: null, composerDispatch: null, composerText: '', menuFor: null });
@@ -1142,9 +1543,48 @@ class Component extends DCLogic {
       ganttLinks: ganttLinks,
       linkLayerH: taskDefs.length * rowH,
 
+      contractPopupOpen: !!contractTask,
+      contractTitle: contractTask ? contractTask.repo + ' — ' + contractTask.task : '',
+      contractBody: contractTask
+        ? (contractTask.contract || (contractTask.milestone ? 'Milestone — no contract required.' : 'No contract specified for this task.'))
+        : '',
+      contractBodyStyle: 'max-height: 360px; overflow-y: auto; padding: 8px 12px; background: #1f1f1f; border: 1px solid #2f3b46; border-radius: 4px; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: '
+        + ((contractTask && contractTask.contract) ? '#cccccc' : '#8b8b8b') + ';',
+      hasDoneEvidence: !!(contractTask && contractTask.doneEvidence),
+      doneEvidenceBody: (contractTask && contractTask.doneEvidence) || '',
+      closeTaskContract: function () { self.setState({ contractFor: null }); },
+      // The backdrop's own onClick closes the popup (click-outside-to-
+      // dismiss, same as the composer overlay above) — the card itself
+      // needs to stop that click from bubbling up to it, or clicking
+      // anywhere inside the card (including just to select/copy text)
+      // would close it.
+      stopPropagation: function (event) { if (event && event.stopPropagation) event.stopPropagation(); },
+
       findingRows: findingRows,
+      flagBadgeStyle: 'display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 8px; font-size: 10px; border: 1px solid #4a3f1c; background: #2a2412; color: #d7ba7d; margin-top: -2px;',
+      disputedBadgeStyle: 'display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 8px; font-size: 10px; border: 1px solid #5a2f2f; background: #2a1414; color: #f48771; margin-top: -2px;',
+      hasAmbiguousChecklist: ambiguousChecklistRows.length > 0,
+      ambiguousChecklistRows: ambiguousChecklistRows,
+      ambiguousChecklistLabel: ambiguousChecklistRows.length === 1
+        ? '1 checklist item was flagged ambiguous while writing Plan — worth a look before it locks in:'
+        : ambiguousChecklistRows.length + ' checklist items were flagged ambiguous while writing Plan — worth a look before they lock in:',
       logRows: this.state.log || [],
       logEmpty: !(this.state.log || []).length,
+      learningRows: (this.state.learnings || []).map(function (l) {
+        return {
+          repo: l.repo,
+          requirementTitle: l.requirementTitle || '(untitled requirement)',
+          createdAt: l.createdAt,
+          isStructured: !!(l.lessons || l.decisions || l.futureImprovements),
+          isFreeform: !(l.lessons || l.decisions || l.futureImprovements),
+          lessons: l.lessons,
+          decisions: l.decisions,
+          futureImprovements: l.futureImprovements,
+          text: l.text
+        };
+      }),
+      learningsEmpty: !(this.state.learnings || []).length,
+      learningBoxStyle: 'padding: 8px 12px; background: #1f1f1f; border: 1px solid #2f3b46; border-radius: 4px; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #cccccc;',
       waitingLabel: waitingCount === 1
         ? 'Findings & inputs — 1 waiting on a human'
         : 'Findings & inputs — ' + waitingCount + ' waiting on a human',

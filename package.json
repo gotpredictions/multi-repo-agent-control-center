@@ -17,11 +17,10 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
-  "bin": {
-    "control-center-mcp": "./out/mcpServer.js"
-  },
   "contributes": {
     "commands": [
       {
@@ -45,6 +44,16 @@
         "title": "Agent Control Center: Create .mcp.json"
       }
     ],
+    "configuration": {
+      "title": "Agent Control Center",
+      "properties": {
+        "multiRepoAgentControlCenter.daemonPort": {
+          "type": "number",
+          "default": 0,
+          "description": "Fixed port for the daemon's MCP HTTP endpoint. 0 = pick a random free port the first time the daemon starts and remember it here, so it stays the same across restarts/reboots instead of invalidating every registered .mcp.json each time. Only change this yourself if you see a port-conflict error — set it to any other free port and restart the runner."
+        }
+      }
+    },
     "walkthroughs": [
       {
         "id": "gettingStarted",
