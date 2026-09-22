@@ -903,6 +903,11 @@ export function activate(context: vscode.ExtensionContext) {
     pickDatabaseThenOpenDashboard
   );
 
+  const addDatabase = vscode.commands.registerCommand(
+    "multiRepoAgentControlCenter.addDatabase",
+    createAndSwitchDatabase
+  );
+
   const openDashboardForDbCmd = vscode.commands.registerCommand(
     "multiRepoAgentControlCenter.openDashboardForDb",
     openDashboardForDb
@@ -928,6 +933,7 @@ export function activate(context: vscode.ExtensionContext) {
       [
         { label: "$(browser) Open Dashboard", command: "multiRepoAgentControlCenter.openDashboard" },
         { label: "$(database) Switch Database…", command: "multiRepoAgentControlCenter.pickDatabase" },
+        { label: "$(add) Add Database…", command: "multiRepoAgentControlCenter.addDatabase" },
         { label: "$(refresh) Restart Runner", command: "multiRepoAgentControlCenter.restartRunner" },
         { label: "$(link) Copy MCP Registration Command", command: "multiRepoAgentControlCenter.copyMcpRegistrationCommand" },
         { label: "$(new-file) Create .mcp.json", command: "multiRepoAgentControlCenter.createMcpJson" },
@@ -945,6 +951,7 @@ export function activate(context: vscode.ExtensionContext) {
     copyMcpRegistrationCommand,
     createMcpJson,
     pickDatabase,
+    addDatabase,
     openDashboardForDbCmd,
     quickMenu,
     ...dbStatusBarItems,

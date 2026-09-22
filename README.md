@@ -436,7 +436,8 @@ fresh install, or everything tracked so far is finished) this collapses to one p
 `$(circuit-board) Control Center` item that just opens the dashboard on whatever's currently
 selected. Beyond 3, or to reach a Done database on purpose, the narrower **⌄** item next to them
 opens a QuickPick for the less-frequent path: **Switch Database…** (lists every database,
-Done included) plus Restart Runner, Copy MCP Registration Command, Create .mcp.json, Reset All
+Done included), **Add Database…** (same prompt as the dashboard's own "+" button), plus Restart
+Runner, Copy MCP Registration Command, Create .mcp.json, Reset All
 Data — commands rare enough that they don't each need their own permanent status bar slot.
 
 Discovered repos start `stopped` (deliberately — nothing runs real Agent SDK sessions against real

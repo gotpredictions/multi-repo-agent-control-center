@@ -50,6 +50,10 @@
       {
         "command": "multiRepoAgentControlCenter.pickDatabase",
         "title": "Agent Control Center: Switch Database"
+      },
+      {
+        "command": "multiRepoAgentControlCenter.addDatabase",
+        "title": "Agent Control Center: Add Database"
       }
     ],
     "configuration": {
